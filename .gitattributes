@@ -1,0 +1,12 @@
+Assets/ArchVizPRO_Interior_Vol.6_URP/3D[[:space:]]DECAL/DecalsPatches2_BaseMap.psd filter=lfs diff=lfs merge=lfs -text
+Assets/ArchVizPRO_Interior_Vol.6_URP/3D[[:space:]]DECAL/DecalsPatches3_BaseMap.psd filter=lfs diff=lfs merge=lfs -text
+Assets/ArchVizPRO_Interior_Vol.6_URP/3D[[:space:]]MATERIAL/Bricks_Mossy/Bricks_Mossy_mask.png filter=lfs diff=lfs merge=lfs -text
+Assets/ArchVizPRO_Interior_Vol.6_URP/3D[[:space:]]MATERIAL/Bricks_Mossy/Bricks_Mossy_normal.png filter=lfs diff=lfs merge=lfs -text
+Assets/ArchVizPRO_Interior_Vol.6_URP/3D[[:space:]]MATERIAL/Wood_Parquet_Exterior/Parquet_Exterior_basecolor.png filter=lfs diff=lfs merge=lfs -text
+Assets/PREFAB/garage[[:space:]]616/Garage.fbx filter=lfs diff=lfs merge=lfs -text
+Assets/PREFAB/Scene[[:space:]]garage/textures/zwartkops_straight_morning_8k.exr filter=lfs diff=lfs merge=lfs -text
+Assets/Scenes/VR[[:space:]]Oil[[:space:]]Engine/Lightmap-0_comp_light.exr filter=lfs diff=lfs merge=lfs -text
+Assets/Scenes/VR[[:space:]]Oil[[:space:]]Engine[[:space:]]1/Lightmap-0_comp_light.exr filter=lfs diff=lfs merge=lfs -text
+Assets/Scenes/VR[[:space:]]Oil[[:space:]]Engine[[:space:]]Normal/Lightmap-0_comp_light.exr filter=lfs diff=lfs merge=lfs -text
+Assets/Ultimate[[:space:]]GPU[[:space:]]Particle[[:space:]]System/Demo/HDRDemo/08[[:space:]]Texture[[:space:]]Sheet[[:space:]]and[[:space:]]Motion[[:space:]]Vectors/Explosion/Explosion_Color.tga filter=lfs diff=lfs merge=lfs -text
+Assets/Ultimate[[:space:]]GPU[[:space:]]Particle[[:space:]]System/Demo/HDRDemo/08[[:space:]]Texture[[:space:]]Sheet[[:space:]]and[[:space:]]Motion[[:space:]]Vectors/Explosion/Explosion_Velocity.tga filter=lfs diff=lfs merge=lfs -text
