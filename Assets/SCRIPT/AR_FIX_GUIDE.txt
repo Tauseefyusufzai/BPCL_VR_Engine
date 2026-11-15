@@ -1,0 +1,122 @@
+# AR Oil Demo - FIX GUIDE
+
+## The Problem
+Objects (engine and bottles) are appearing in **UI space** instead of **AR world space**.
+This means they show as tiny icons at the bottom of the screen instead of 3D objects in the real world.
+
+## Root Cause
+The `AR_OilInteraction_Manager` GameObject is likely **UNDER A CANVAS** in your scene hierarchy.
+When a 3D object is spawned from a script that's under a Canvas, Unity treats spawned objects as UI elements!
+
+---
+
+## SOLUTION: Follow These Steps In Unity Editor
+
+### Step 1: Open Your Scene
+Open the scene where you have the AR setup.
+
+### Step 2: Check Hierarchy
+In the Hierarchy window, look for:
+- `AR_OilInteraction_Manager` (has AR_OilInteraction script)
+- Check if it's UNDER a Canvas (like `UI_Canvas`)
+
+### Step 3: Move AR_OilInteraction_Manager to Root
+1. In Hierarchy, drag `AR_OilInteraction_Manager` to the TOP level (not under any Canvas!)
+2. It should be at the SAME level as:
+   - AR Session
+   - XR Origin
+   - UI_Canvas
+
+### Correct Hierarchy Structure:
+```
+Scene
+├── AR Session
+│   └── ARSession component
+│   └── ARInputManager component
+│
+├── XR Origin (or AR Session Origin)
+│   └── XROrigin component
+│   └── ARPlaneManager component
+│   └── ARRaycastManager component
+│   └── Camera Offset
+│       └── AR Camera (MainCamera tag)
+│           └── Camera component
+│           └── ARCameraManager component
+│           └── ARCameraBackground component
+│           └── TrackedPoseDriver (Input System)
+│           └── ARCameraFix component (add this!)
+│
+├── AR_OilInteraction_Manager   ← MUST BE AT ROOT LEVEL, NOT UNDER CANVAS!
+│   └── AR_OilInteraction component
+│
+├── UI_Canvas                   ← UI is SEPARATE from AR_OilInteraction_Manager!
+│   └── Canvas component (ScreenSpaceOverlay)
+│   └── AR_OilInteractionUI component
+│
+└── Directional Light (optional)
+```
+
+### Step 4: Add Diagnostic Scripts (Optional)
+1. Add `AR_HierarchyFixer` to any GameObject
+2. Add `AR_SetupValidator` to any GameObject
+3. Add `ARCameraFix` to the AR Camera
+
+### Step 5: Verify Camera Has Required Components
+Select `AR Camera` and ensure it has:
+- ✓ Camera component
+- ✓ ARCameraManager component
+- ✓ ARCameraBackground component
+- ✓ TrackedPoseDriver (Input System) component
+
+### Step 6: Build and Test
+1. Save the scene
+2. Build to device
+3. Point camera at a flat surface (table, floor)
+4. Objects should appear in 3D space after plane is detected
+
+---
+
+## Quick Checks
+
+### If Screen is BLACK (no camera feed):
+- ARCameraBackground is missing from AR Camera
+- ARCameraManager is missing from AR Camera
+- AR Session is not enabled
+
+### If Objects are TINY at bottom of screen:
+- AR_OilInteraction_Manager is under a Canvas (WRONG!)
+- Move it to scene root level
+
+### If Objects don't appear at all:
+- Check if prefabs are assigned in AR_OilInteraction Inspector
+- Check console for errors
+- Make sure plane detection is working
+
+---
+
+## Script Files
+
+| Script | Purpose | Where to Add |
+|--------|---------|--------------|
+| AR_OilInteraction.cs | Main AR logic | AR_OilInteraction_Manager (root level) |
+| AR_OilInteractionUI.cs | Creates UI elements | UI_Canvas |
+| AR_HierarchyFixer.cs | Diagnoses hierarchy issues | Any GameObject |
+| AR_SetupValidator.cs | Validates AR setup | Any GameObject |
+| ARCameraFix.cs | Fixes camera issues | AR Camera |
+
+---
+
+## Debug Tips
+
+1. **Enable Debug Logs**: Scripts output detailed logs to console
+2. **Check AR Session State**: Should be "SessionTracking" when working
+3. **Check Spawn Position**: Logs show where objects are being placed
+4. **Verify Layer**: Objects should be on "Default" layer, NOT "UI" layer
+
+---
+
+## Samsung S23 Specific
+
+- Use Input System package (not Both, not Legacy)
+- ARCore should be supported
+- Camera permission must be granted

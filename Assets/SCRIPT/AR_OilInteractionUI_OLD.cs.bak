@@ -1,0 +1,409 @@
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+
+/// <summary>
+/// Helper component to set up the AR Oil Demo UI at runtime.
+/// Attach this to a Canvas in your scene.
+/// </summary>
+public class AR_OilInteractionUI : MonoBehaviour
+{
+    [Header("=== AR OIL INTERACTION REFERENCE ===")]
+    [SerializeField] private AR_OilInteraction arOilInteraction;
+
+    [Header("=== AUTO-CREATED UI ELEMENTS ===")]
+    [SerializeField] private bool createUIOnStart = true;
+
+    // Created UI references
+    private Canvas canvas;
+    private GameObject statusPanel;
+    private TextMeshProUGUI statusText;
+    private TextMeshProUGUI instructionText;
+    private Slider pourSlider;
+    private Button resetButton;
+    private Image tiltIndicator;
+    private GameObject resultPanel;
+    private TextMeshProUGUI resultText;
+    private GameObject benefitsPanel;
+    private TextMeshProUGUI benefitsText;
+    private ScrollRect benefitsScrollRect;
+
+    private void Start()
+    {
+        if (createUIOnStart)
+        {
+            SetupCanvas();
+            CreateUI();
+            LinkToARInteraction();
+        }
+    }
+
+    private void SetupCanvas()
+    {
+        canvas = GetComponent<Canvas>();
+        if (canvas == null)
+        {
+            canvas = gameObject.AddComponent<Canvas>();
+        }
+
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 100;
+
+        if (GetComponent<CanvasScaler>() == null)
+        {
+            CanvasScaler scaler = gameObject.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1080, 2400);
+            scaler.matchWidthOrHeight = 0.5f;
+        }
+
+        if (GetComponent<GraphicRaycaster>() == null)
+        {
+            gameObject.AddComponent<GraphicRaycaster>();
+        }
+    }
+
+    private void CreateUI()
+    {
+        // Create Status Panel (Top Center - Full Width)
+        statusPanel = CreatePanel("StatusPanel", new Vector2(0, 1), new Vector2(1, 1), 
+            new Vector2(0.5f, 1f), new Vector2(0, -80), new Vector2(-40, 120));
+        
+        // Status Text
+        GameObject statusObj = CreateTextObject(statusPanel.transform, "StatusText", 
+            new Vector2(0, 0.5f), new Vector2(1, 1), "Ready");
+        statusText = statusObj.GetComponent<TextMeshProUGUI>();
+        statusText.fontSize = 40;
+        statusText.fontStyle = FontStyles.Bold;
+        statusText.color = Color.white;
+        statusText.alignment = TextAlignmentOptions.Center;
+
+        // Instruction Text
+        GameObject instructionObj = CreateTextObject(statusPanel.transform, "InstructionText",
+            new Vector2(0, 0), new Vector2(1, 0.5f), "Scanning for surface...");
+        instructionText = instructionObj.GetComponent<TextMeshProUGUI>();
+        instructionText.fontSize = 32;
+        instructionText.color = new Color(0.9f, 0.9f, 0.9f);
+        instructionText.alignment = TextAlignmentOptions.Center;
+
+        // Create Pour Progress Slider (Middle-Bottom)
+        GameObject sliderObj = new GameObject("PourSlider");
+        sliderObj.transform.SetParent(transform, false);
+        
+        RectTransform sliderRect = sliderObj.AddComponent<RectTransform>();
+        sliderRect.anchorMin = new Vector2(0.1f, 0.15f);
+        sliderRect.anchorMax = new Vector2(0.9f, 0.18f);
+        sliderRect.offsetMin = Vector2.zero;
+        sliderRect.offsetMax = Vector2.zero;
+
+        pourSlider = sliderObj.AddComponent<Slider>();
+        pourSlider.interactable = false;
+        pourSlider.minValue = 0;
+        pourSlider.maxValue = 1;
+        pourSlider.value = 0;
+
+        // Slider Background
+        GameObject sliderBg = new GameObject("Background");
+        sliderBg.transform.SetParent(sliderObj.transform, false);
+        Image bgImage = sliderBg.AddComponent<Image>();
+        bgImage.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
+        RectTransform bgRect = sliderBg.GetComponent<RectTransform>();
+        bgRect.anchorMin = Vector2.zero;
+        bgRect.anchorMax = Vector2.one;
+        bgRect.sizeDelta = Vector2.zero;
+
+        // Slider Fill Area
+        GameObject fillArea = new GameObject("FillArea");
+        fillArea.transform.SetParent(sliderObj.transform, false);
+        RectTransform fillAreaRect = fillArea.AddComponent<RectTransform>();
+        fillAreaRect.anchorMin = new Vector2(0, 0.25f);
+        fillAreaRect.anchorMax = new Vector2(1, 0.75f);
+        fillAreaRect.offsetMin = new Vector2(5, 0);
+        fillAreaRect.offsetMax = new Vector2(-5, 0);
+
+        GameObject fill = new GameObject("Fill");
+        fill.transform.SetParent(fillArea.transform, false);
+        Image fillImage = fill.AddComponent<Image>();
+        fillImage.color = new Color(0.2f, 0.8f, 0.2f);
+        RectTransform fillRect = fill.GetComponent<RectTransform>();
+        fillRect.anchorMin = Vector2.zero;
+        fillRect.anchorMax = Vector2.one;
+        fillRect.sizeDelta = Vector2.zero;
+
+        pourSlider.fillRect = fillRect;
+        pourSlider.gameObject.SetActive(false);
+
+        // Create Tilt Indicator
+        GameObject tiltObj = new GameObject("TiltIndicator");
+        tiltObj.transform.SetParent(transform, false);
+        
+        RectTransform tiltRect = tiltObj.AddComponent<RectTransform>();
+        tiltRect.anchorMin = new Vector2(0.4f, 0.2f);
+        tiltRect.anchorMax = new Vector2(0.6f, 0.25f);
+        tiltRect.offsetMin = Vector2.zero;
+        tiltRect.offsetMax = Vector2.zero;
+
+        tiltIndicator = tiltObj.AddComponent<Image>();
+        tiltIndicator.type = Image.Type.Filled;
+        tiltIndicator.fillMethod = Image.FillMethod.Horizontal;
+        tiltIndicator.color = Color.cyan;
+        tiltIndicator.gameObject.SetActive(false);
+
+        // Reset Button REMOVED per user request
+        // To restart, user taps a different bottle
+        // Keep variable for backward compatibility
+        resetButton = null;
+
+        // Create Result Panel (Center)
+        resultPanel = CreatePanel("ResultPanel", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+            new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(700, 200));
+        
+        Image resultBg = resultPanel.GetComponent<Image>();
+        resultBg.color = new Color(0, 0, 0, 0.9f);
+
+        GameObject resultTextObj = CreateTextObject(resultPanel.transform, "ResultText",
+            new Vector2(0.05f, 0.1f), new Vector2(0.95f, 0.9f), "");
+        resultText = resultTextObj.GetComponent<TextMeshProUGUI>();
+        resultText.fontSize = 40;
+        resultText.fontStyle = FontStyles.Bold;
+        resultText.alignment = TextAlignmentOptions.Center;
+        
+        resultPanel.SetActive(false);
+
+        // Create BPCL Benefits Panel (Right Side - Scrollable)
+        CreateBenefitsPanel();
+    }
+
+    private void CreateBenefitsPanel()
+    {
+        // Benefits Panel Container
+        benefitsPanel = new GameObject("BenefitsPanel");
+        benefitsPanel.transform.SetParent(transform, false);
+
+        RectTransform panelRect = benefitsPanel.AddComponent<RectTransform>();
+        panelRect.anchorMin = new Vector2(0.55f, 0.1f);
+        panelRect.anchorMax = new Vector2(0.98f, 0.85f);
+        panelRect.offsetMin = Vector2.zero;
+        panelRect.offsetMax = Vector2.zero;
+
+        Image panelBg = benefitsPanel.AddComponent<Image>();
+        panelBg.color = new Color(0.05f, 0.15f, 0.05f, 0.95f); // Dark green background
+
+        // Add outline effect
+        Outline outline = benefitsPanel.AddComponent<Outline>();
+        outline.effectColor = new Color(0.2f, 0.8f, 0.2f); // Green outline
+        outline.effectDistance = new Vector2(3, 3);
+
+        // Header
+        GameObject header = new GameObject("Header");
+        header.transform.SetParent(benefitsPanel.transform, false);
+
+        RectTransform headerRect = header.AddComponent<RectTransform>();
+        headerRect.anchorMin = new Vector2(0, 0.92f);
+        headerRect.anchorMax = new Vector2(1, 1f);
+        headerRect.offsetMin = Vector2.zero;
+        headerRect.offsetMax = Vector2.zero;
+
+        Image headerBg = header.AddComponent<Image>();
+        headerBg.color = new Color(0.1f, 0.4f, 0.1f); // Green header
+
+        GameObject headerTextObj = new GameObject("HeaderText");
+        headerTextObj.transform.SetParent(header.transform, false);
+
+        TextMeshProUGUI headerText = headerTextObj.AddComponent<TextMeshProUGUI>();
+        headerText.text = "🛢️ MAK Supreme Lube";
+        headerText.fontSize = 28;
+        headerText.fontStyle = FontStyles.Bold;
+        headerText.color = Color.white;
+        headerText.alignment = TextAlignmentOptions.Center;
+
+        RectTransform headerTextRect = headerTextObj.GetComponent<RectTransform>();
+        headerTextRect.anchorMin = Vector2.zero;
+        headerTextRect.anchorMax = Vector2.one;
+        headerTextRect.offsetMin = new Vector2(10, 0);
+        headerTextRect.offsetMax = new Vector2(-10, 0);
+
+        // Scroll View
+        GameObject scrollView = new GameObject("ScrollView");
+        scrollView.transform.SetParent(benefitsPanel.transform, false);
+
+        RectTransform scrollRect = scrollView.AddComponent<RectTransform>();
+        scrollRect.anchorMin = new Vector2(0, 0);
+        scrollRect.anchorMax = new Vector2(1, 0.91f);
+        scrollRect.offsetMin = new Vector2(10, 10);
+        scrollRect.offsetMax = new Vector2(-10, -5);
+
+        benefitsScrollRect = scrollView.AddComponent<ScrollRect>();
+        benefitsScrollRect.horizontal = false;
+        benefitsScrollRect.vertical = true;
+        benefitsScrollRect.movementType = ScrollRect.MovementType.Elastic;
+        benefitsScrollRect.elasticity = 0.1f;
+        benefitsScrollRect.inertia = true;
+        benefitsScrollRect.decelerationRate = 0.135f;
+        benefitsScrollRect.scrollSensitivity = 20f;
+
+        // Viewport
+        GameObject viewport = new GameObject("Viewport");
+        viewport.transform.SetParent(scrollView.transform, false);
+
+        RectTransform viewportRect = viewport.AddComponent<RectTransform>();
+        viewportRect.anchorMin = Vector2.zero;
+        viewportRect.anchorMax = Vector2.one;
+        viewportRect.offsetMin = Vector2.zero;
+        viewportRect.offsetMax = Vector2.zero;
+
+        viewport.AddComponent<Image>().color = Color.clear;
+        Mask mask = viewport.AddComponent<Mask>();
+        mask.showMaskGraphic = false;
+
+        benefitsScrollRect.viewport = viewportRect;
+
+        // Content
+        GameObject content = new GameObject("Content");
+        content.transform.SetParent(viewport.transform, false);
+
+        RectTransform contentRect = content.AddComponent<RectTransform>();
+        contentRect.anchorMin = new Vector2(0, 1);
+        contentRect.anchorMax = new Vector2(1, 1);
+        contentRect.pivot = new Vector2(0.5f, 1);
+        contentRect.anchoredPosition = Vector2.zero;
+        contentRect.sizeDelta = new Vector2(0, 1200); // Height for scrolling
+
+        // Add ContentSizeFitter for dynamic content
+        ContentSizeFitter fitter = content.AddComponent<ContentSizeFitter>();
+        fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+        // Add VerticalLayoutGroup
+        VerticalLayoutGroup layout = content.AddComponent<VerticalLayoutGroup>();
+        layout.padding = new RectOffset(15, 15, 15, 15);
+        layout.spacing = 10;
+        layout.childAlignment = TextAnchor.UpperLeft;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = true;
+        layout.childForceExpandHeight = false;
+
+        benefitsScrollRect.content = contentRect;
+
+        // Benefits Text
+        GameObject benefitsTextObj = new GameObject("BenefitsText");
+        benefitsTextObj.transform.SetParent(content.transform, false);
+
+        benefitsText = benefitsTextObj.AddComponent<TextMeshProUGUI>();
+        benefitsText.fontSize = 22;
+        benefitsText.color = Color.white;
+        benefitsText.alignment = TextAlignmentOptions.TopLeft;
+        benefitsText.enableWordWrapping = true;
+        benefitsText.richText = true;
+        benefitsText.lineSpacing = 5;
+
+        RectTransform benefitsTextRect = benefitsTextObj.GetComponent<RectTransform>();
+        benefitsTextRect.anchorMin = new Vector2(0, 0);
+        benefitsTextRect.anchorMax = new Vector2(1, 1);
+
+        // Set initial text (will be updated when BPCL is poured)
+        benefitsText.text = "";
+
+        benefitsPanel.SetActive(false);
+    }
+
+    private GameObject CreatePanel(string name, Vector2 anchorMin, Vector2 anchorMax, 
+        Vector2 pivot, Vector2 anchoredPosition, Vector2 sizeDelta)
+    {
+        GameObject panel = new GameObject(name);
+        panel.transform.SetParent(transform, false);
+
+        RectTransform rect = panel.AddComponent<RectTransform>();
+        rect.anchorMin = anchorMin;
+        rect.anchorMax = anchorMax;
+        rect.pivot = pivot;
+        rect.anchoredPosition = anchoredPosition;
+        rect.sizeDelta = sizeDelta;
+
+        Image image = panel.AddComponent<Image>();
+        image.color = new Color(0, 0, 0, 0.7f);
+
+        return panel;
+    }
+
+    private GameObject CreateTextObject(Transform parent, string name, Vector2 anchorMin, 
+        Vector2 anchorMax, string defaultText)
+    {
+        GameObject textObj = new GameObject(name);
+        textObj.transform.SetParent(parent, false);
+
+        RectTransform rect = textObj.AddComponent<RectTransform>();
+        rect.anchorMin = anchorMin;
+        rect.anchorMax = anchorMax;
+        rect.offsetMin = new Vector2(10, 5);
+        rect.offsetMax = new Vector2(-10, -5);
+
+        TextMeshProUGUI tmp = textObj.AddComponent<TextMeshProUGUI>();
+        tmp.text = defaultText;
+        tmp.alignment = TextAlignmentOptions.Center;
+
+        return textObj;
+    }
+
+    private void LinkToARInteraction()
+    {
+        if (arOilInteraction == null)
+        {
+            arOilInteraction = FindFirstObjectByType<AR_OilInteraction>();
+        }
+
+        if (arOilInteraction == null)
+        {
+            Debug.LogWarning("AR_OilInteractionUI: No AR_OilInteraction found in scene!");
+            return;
+        }
+
+        // Use reflection or serialized field linking
+        // For direct linking, we need to access private fields via SerializeField
+        // This is a workaround - ideally use the Inspector to link these
+        
+        System.Type type = arOilInteraction.GetType();
+        
+        SetPrivateField(type, "statusText", statusText);
+        SetPrivateField(type, "instructionText", instructionText);
+        SetPrivateField(type, "pourProgressSlider", pourSlider);
+        SetPrivateField(type, "resetButton", resetButton);
+        SetPrivateField(type, "tiltIndicator", tiltIndicator);
+        SetPrivateField(type, "resultPanel", resultPanel);
+        SetPrivateField(type, "resultText", resultText);
+        SetPrivateField(type, "benefitsPanel", benefitsPanel);
+        SetPrivateField(type, "benefitsText", benefitsText);
+        SetPrivateField(type, "benefitsScrollRect", benefitsScrollRect);
+
+        // Setup reset button click
+        if (resetButton != null)
+        {
+            resetButton.onClick.AddListener(arOilInteraction.ResetScene);
+        }
+
+        Debug.Log("AR_OilInteractionUI: UI linked to AR_OilInteraction");
+    }
+
+    private void SetPrivateField(System.Type type, string fieldName, object value)
+    {
+        var field = type.GetField(fieldName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        if (field != null)
+        {
+            field.SetValue(arOilInteraction, value);
+        }
+    }
+
+    /// <summary>
+    /// Get references to UI elements for manual linking.
+    /// </summary>
+    public TextMeshProUGUI GetStatusText() => statusText;
+    public TextMeshProUGUI GetInstructionText() => instructionText;
+    public Slider GetPourSlider() => pourSlider;
+    public Button GetResetButton() => resetButton;
+    public Image GetTiltIndicator() => tiltIndicator;
+    public GameObject GetResultPanel() => resultPanel;
+    public TextMeshProUGUI GetResultText() => resultText;
+    public GameObject GetBenefitsPanel() => benefitsPanel;
+    public TextMeshProUGUI GetBenefitsText() => benefitsText;
+    public ScrollRect GetBenefitsScrollRect() => benefitsScrollRect;
+}

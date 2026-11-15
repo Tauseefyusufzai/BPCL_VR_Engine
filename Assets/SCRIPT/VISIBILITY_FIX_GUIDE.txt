@@ -1,0 +1,190 @@
+===============================================
+CRITICAL FIX - OBJECTS NOT VISIBLE
+===============================================
+
+CHANGES MADE:
+=============
+
+1. ✅ Changed default objectScale from 0.1 to 0.5
+2. ✅ Centered status panel UI
+3. ✅ Added debug logging for camera & spawn positions
+4. ✅ Force-enabled all renderers on spawn
+5. ✅ Created ShowObjectPositions.cs debug script
+
+===============================================
+WHAT TO DO NOW
+===============================================
+
+STEP 1: Add Debug Script (IMPORTANT!)
+--------------------------------------
+1. In Unity Hierarchy → Create Empty GameObject
+2. Name it "PositionDebugger"
+3. Add Component → ShowObjectPositions
+4. This will show on-screen WHERE objects are!
+
+STEP 2: Rebuild & Test
+-----------------------
+1. File → Save All (Ctrl+S)
+2. Build & Run to Samsung S23
+3. Look at LEFT SIDE of screen for debug info
+4. It will show:
+   - Camera position
+   - Object positions
+   - Distance from camera
+   - If objects are in view
+   - Number of visible renderers
+
+STEP 3: Check Debug Output
+---------------------------
+After building, the debug panel will show:
+
+✅ GOOD:
+  Engine: ✓ animated_engine
+  Pos: (0.5, 0.2, 1.5)
+  Dist from Cam: 1.2m
+  In View: YES
+  Renderers: 94/94 visible
+
+❌ BAD:
+  Engine: ✓ animated_engine
+  Pos: (0.0, 0.26, 1.0)
+  Dist from Cam: 1.0m
+  In View: NO    ← Problem!
+  Renderers: 0/94 visible  ← Problem!
+
+===============================================
+POSSIBLE ISSUES & FIXES
+===============================================
+
+ISSUE 1: Objects spawn at (0, 0.26, 1.0)
+-----------------------------------------
+This means camera is at world origin (0,0,0)
+→ Objects spawn 1 meter forward from origin
+→ But YOU might be standing elsewhere!
+
+FIX:
+Camera should be moving with you in AR.
+Check: AR Session Origin has AR Camera as child?
+
+ISSUE 2: "In View: NO"
+-----------------------
+Objects are spawning but behind you or outside FOV
+
+FIX:
+Turn 360° slowly to find them
+OR
+Change spawnDistance to 2.0 meters
+
+ISSUE 3: "Renderers: 0/94 visible"
+-----------------------------------
+Renderers disabled or materials transparent
+
+FIX:
+This is now auto-fixed in the code!
+All renderers force-enabled on spawn.
+
+ISSUE 4: Scale still 0.1 in logs
+---------------------------------
+You changed it in Inspector but didn't save
+
+FIX:
+1. Change objectScale to 0.5
+2. File → Save Scene (Ctrl+S)
+3. File → Save Project
+4. Rebuild
+
+===============================================
+NEXT BUILD CHECKLIST
+===============================================
+
+Before Building:
+□ PositionDebugger GameObject exists in scene
+□ ShowObjectPositions.cs attached to it
+□ AR_OilInteraction_Manager: objectScale = 0.5
+□ All prefabs assigned (Engine, BPCL, Local)
+□ File → Save All
+
+After Installing:
+□ Grant camera permission
+□ Point at floor/table until plane detected
+□ Wait 2-3 seconds
+□ Look at LEFT side debug panel
+□ Note the "In View" status
+
+If "In View: NO":
+□ Turn around 360°
+□ Check "Pos" values match camera position
+□ Check "Dist from Cam" is reasonable (1-2m)
+
+===============================================
+EXPECTED BEHAVIOR
+===============================================
+
+1. Open app → Camera permission prompt
+2. Point at floor → White dots appear (plane detected)
+3. Objects spawn automatically
+4. Debug panel shows:
+   - Camera Pos: (changes as you move)
+   - Engine Pos: (near camera, in front)
+   - Dist: 1-2 meters
+   - In View: YES
+   - Renderers: 94/94 visible
+
+5. You should SEE the engine and bottles!
+
+===============================================
+IF STILL NOT VISIBLE
+===============================================
+
+Check these in debug panel:
+
+1. "Engine: NOT FOUND"
+   → Prefab not assigned in Inspector!
+   → Go to Unity, assign prefabs, rebuild
+
+2. "In View: NO" but Pos looks reasonable
+   → Turn phone/body 360° slowly
+   → Objects might be to your side
+
+3. "In View: YES" but still can't see
+   → Check phone screen brightness
+   → Objects might be too small still
+   → Increase objectScale to 1.0
+
+4. "Dist from Cam: 0.00m"
+   → Objects at same position as camera
+   → Increase spawnDistance to 2.0
+
+5. Camera Pos: (0.0, 0.0, 0.0) always
+   → AR tracking not working!
+   → Check ARCore permissions
+   → Reinstall app
+
+===============================================
+LOGCAT COMMANDS
+===============================================
+
+To filter useful logs:
+adb logcat -s Unity:I
+
+Look for these new logs:
+[AR_Oil] Camera Position: (x, y, z)
+[AR_Oil] Spawn Position: (x, y, z)
+[AR_Oil] Engine spawned at: (x, y, z), Scale: 0.5, Renderers: 94
+
+===============================================
+QUICK SETTINGS REFERENCE
+===============================================
+
+Recommended AR_OilInteraction settings:
+
+Spawn Settings:
+├─ Spawn Distance: 1.5m
+├─ Object Scale: 0.5 (NOT 0.1!)
+├─ Bottle Spacing: 0.4m
+└─ Height Offset: 0.0m
+
+If objects TOO BIG → reduce to 0.3
+If objects TOO SMALL → increase to 0.8
+
+===============================================

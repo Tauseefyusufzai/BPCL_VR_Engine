@@ -1,0 +1,156 @@
+===============================================
+TROUBLESHOOTING: OBJECTS NOT VISIBLE IN AR
+===============================================
+
+PROBLEM: Objects spawn but are invisible
+
+POSSIBLE CAUSES:
+================
+
+1. ✓ SCALE TOO SMALL
+   - Default objectScale = 0.1 might be too small for your engine model
+   - Solution: Increase to 0.3 - 0.5
+
+2. ✓ PREFAB HAS NO RENDERERS
+   - Your prefab might not have visible meshes
+   - Check: Does prefab show in Scene view?
+
+3. ✓ OBJECTS BEHIND CAMERA
+   - Objects spawn behind you
+   - Solution: Turn around or adjust spawn distance
+
+4. ✓ LAYER/CULLING ISSUE
+   - Camera might not see certain layers
+   - Check camera culling mask
+
+===============================================
+QUICK FIX SOLUTIONS
+===============================================
+
+METHOD 1: Use AR_QuickFix Script (RECOMMENDED)
+------------------------------------------------
+1. In Unity Scene, add new GameObject called "QuickFix"
+2. Attach AR_QuickFix.cs script to it
+3. Set these values in Inspector:
+   - New Engine Scale: 0.5
+   - New Bottle Scale: 0.3
+   - Move Closer To Camera: ✓ Checked
+   - Distance From Camera: 1.5
+
+4. Build and Run
+5. Objects will auto-fix 2 seconds after spawn
+
+METHOD 2: Adjust AR_OilInteraction Settings
+---------------------------------------------
+1. Select "AR_OilInteraction_Manager" in Hierarchy
+2. In Inspector, find "Spawn Settings"
+3. Change these values:
+   - Object Scale: 0.5 (instead of 0.1)
+   - Spawn Distance: 1.5 (instead of 1.0)
+   - Height Offset: 0.0 (instead of 0.1)
+
+4. Rebuild and test
+
+METHOD 3: Check Prefab Scale
+------------------------------
+1. Open your Engine prefab
+2. Check if it's VERY large (like scale 100)
+3. If so, scale it down to 1.0 in the prefab
+4. Then AR scale of 0.1 will work
+
+METHOD 4: Debug with AR_DebugHelper
+------------------------------------
+1. Attach AR_DebugHelper.cs to AR_OilInteraction_Manager
+2. Build and Run
+3. You'll see a debug panel showing:
+   - If objects spawned
+   - Their positions
+   - Their scales
+   - Number of renderers
+
+4. This helps identify the exact issue
+
+===============================================
+NEXT BUILD TEST CHECKLIST
+===============================================
+
+Before building:
+□ Check Engine Prefab is assigned
+□ Check BPCL Bottle Prefab is assigned
+□ Check Local Bottle Prefab is assigned
+□ Verify prefabs have visible meshes in Scene view
+□ Set objectScale to at least 0.3
+□ Add AR_QuickFix script to scene
+
+After building:
+□ Allow camera permissions
+□ Point camera at floor/table
+□ Wait for plane detection (white dots appear)
+□ Wait 2-3 seconds after plane detected
+□ Objects should appear in front of you
+□ If not visible, turn 360° slowly
+
+===============================================
+RECOMMENDED SCENE SETUP
+===============================================
+
+Add to your scene:
+1. AR_OilInteraction_Manager (existing)
+2. New GameObject → Add AR_QuickFix component
+3. New GameObject → Add AR_DebugHelper component
+
+Inspector settings for AR_OilInteraction:
+- Spawn Distance: 1.5 meters
+- Object Scale: 0.5
+- Bottle Spacing: 0.4 meters
+- Height Offset: 0.0 meters
+
+This will make objects larger and easier to see!
+
+===============================================
+LOGCAT CHECK
+===============================================
+
+Look for these messages in Android Logcat:
+
+✅ GOOD:
+"[AR_Oil] Engine spawned at: (X,Y,Z), Scale: 0.5, Renderers: 10"
+"[AR_Oil] BPCL Bottle spawned at: (X,Y,Z), Scale: 0.25"
+
+❌ BAD:
+"[AR_Oil] Engine Prefab is NULL!"
+"[AR_Oil] BPCL Bottle Prefab is NULL!"
+→ This means prefabs not assigned!
+
+===============================================
+CAMERA DISTANCE GUIDE
+===============================================
+
+Spawn Distance vs Visibility:
+- 0.5m = Too close (might clip through camera)
+- 1.0m = Good for small objects
+- 1.5m = RECOMMENDED (good view)
+- 2.0m = Far but visible
+- 3.0m+ = May be too far to see details
+
+Object Scale vs Size:
+- 0.1 = Tiny (hard to see)
+- 0.3 = Small but visible
+- 0.5 = RECOMMENDED (clearly visible)
+- 1.0 = Large (might be too big)
+
+===============================================
+STILL NOT WORKING?
+===============================================
+
+Last resort debug steps:
+1. In Unity Editor, open AR_OilInteraction.cs
+2. Find line ~363: spawnedEngine.transform.localScale = Vector3.one * objectScale;
+3. Change to: spawnedEngine.transform.localScale = Vector3.one * 1.0f;
+4. Rebuild
+
+This will make engine VERY large - you'll definitely see it!
+
+Then adjust back down to comfortable size (0.5 recommended).
+
+===============================================

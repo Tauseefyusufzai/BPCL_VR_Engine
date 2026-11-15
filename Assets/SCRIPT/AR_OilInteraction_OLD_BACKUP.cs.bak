@@ -1,0 +1,2390 @@
+using UnityEngine;
+using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.ARSubsystems;
+using UnityEngine.UI;
+using System.Collections;
+using System.Collections.Generic;
+using TMPro;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.EnhancedTouch;
+using Touch = UnityEngine.InputSystem.EnhancedTouch.Touch;
+#endif
+
+/// <summary>
+/// AR Oil Interaction Demo - Manages AR plane detection, bottle selection via touch,
+/// tilt-based pouring gesture, and engine state transitions based on oil type.
+/// Designed for Samsung S23 Android device.
+/// </summary>
+public class AR_OilInteraction : MonoBehaviour
+{
+    #region Enums
+
+    public enum OilType
+    {
+        None,
+        BPCL,
+        Local
+    }
+
+    public enum EngineState
+    {
+        Idle,
+        Smooth,
+        Vibrating
+    }
+
+    #endregion
+
+    #region Serialized Fields - AR Components
+
+    [Header("=== AR COMPONENTS ===")]
+    [SerializeField] private ARPlaneManager arPlaneManager;
+    [SerializeField] private ARRaycastManager arRaycastManager;
+    [SerializeField] private Camera arCamera;
+
+    #endregion
+
+    #region Serialized Fields - Prefabs
+
+    [Header("=== PREFABS ===")]
+    [SerializeField] private GameObject enginePrefab;
+    [SerializeField] private GameObject bpclBottlePrefab;
+    [SerializeField] private GameObject localBottlePrefab;
+
+    #endregion
+
+    #region Serialized Fields - Oil Tank Settings
+
+    [Header("=== OIL TANK SETTINGS ===")]
+    [Tooltip("Name of the oil tank hole child object in the engine prefab (e.g., 'OilTankHole')")]
+    [SerializeField] private string oilTankHoleName = "OilTankHole";
+    
+    [Tooltip("Offset from engine center if oil tank hole is not found")]
+    [SerializeField] private Vector3 oilTankHoleOffset = new Vector3(0, 0.3f, 0.2f);
+    
+    [Tooltip("How high the bottle rises before moving to pour")]
+    [SerializeField] private float bottleLiftHeight = 0.5f;
+    
+    [Tooltip("Distance above the oil tank hole when pouring")]
+    [SerializeField] private float pourHeightAboveTank = 0.25f;
+
+    #endregion
+
+    #region Serialized Fields - AR Benefits Panel
+
+    [Header("=== AR BENEFITS PANEL (World Space) ===")]
+    [Tooltip("Show benefits panel ONLY in AR world space (not screen UI)")]
+    [SerializeField] private bool showBenefitsInARSpace = true;
+    
+    [Tooltip("Distance of AR panel to the SIDE of engine (so it doesn't block view)")]
+    [SerializeField] private float arPanelDistance = 1.0f;
+    
+    [Tooltip("Height offset for AR panel above engine")]
+    [SerializeField] private float arPanelHeightOffset = 0.3f;
+    
+    [Tooltip("Scale of the AR benefits panel (0.001-0.003 recommended)")]
+    [SerializeField] private float arPanelScale = 0.0015f;
+
+    #endregion
+
+    #region Serialized Fields - Spawn Settings
+
+    [Header("=== SPAWN SETTINGS ===")]
+    [Tooltip("Distance from camera to spawn objects (1-3 meters recommended)")]
+    [SerializeField] private float spawnDistance = 1.2f; // Closer to camera
+    
+    [Tooltip("Height offset from detected plane")]
+    [SerializeField] private float heightOffset = 0.1f; // Slightly above plane
+    
+    [Tooltip("Spacing between bottles (0.5-1.0 meters)")]
+    [SerializeField] private float bottleSpacing = 1.0f; // Good spacing
+    
+    [Tooltip("Scale of spawned objects - ENGINE scale in AR (1.0 = real size)")]
+    [SerializeField] private float objectScale = 1.5f; // Much larger for visibility
+
+    #endregion
+
+    #region Serialized Fields - Tilt Detection
+
+    [Header("=== TILT DETECTION ===")]
+    [Tooltip("Y-axis acceleration threshold. More negative = more tilt needed. Try -0.3 to -0.5")]
+    [SerializeField] private float tiltThreshold = -0.35f;
+    
+    [Tooltip("Duration to complete pour when tilting (seconds)")]
+    [SerializeField] private float pourDuration = 2.5f;
+    
+    [Tooltip("Smoothing factor for accelerometer (0.1=smooth, 0.5=responsive)")]
+    [SerializeField] private float accelerometerSmoothing = 0.25f;
+    
+    [Tooltip("Maximum distance from engine allowed during pour (meters). Too far = Wrong Pouring")]
+    [SerializeField] private float maxPourDistance = 3.0f;
+
+    #endregion
+
+    #region Serialized Fields - Visual Feedback
+
+    [Header("=== VISUAL FEEDBACK ===")]
+    [SerializeField] private Color highlightColor = Color.yellow;
+    [SerializeField] private Color bpclColor = new Color(0.2f, 0.6f, 0.2f); // Green tint
+    [SerializeField] private Color localColor = new Color(0.6f, 0.2f, 0.2f); // Red tint
+
+    #endregion
+
+    #region Serialized Fields - Particle Effects
+
+    [Header("=== PARTICLE EFFECTS ===")]
+    [SerializeField] private ParticleSystem smokeParticles;
+    [SerializeField] private ParticleSystem blackSmokeParticles;
+    [SerializeField] private ParticleSystem pouringParticles;
+
+    #endregion
+
+    #region Serialized Fields - UI Elements
+
+    [Header("=== UI ELEMENTS ===")]
+    [SerializeField] private GameObject uiPanel;
+    [SerializeField] private TextMeshProUGUI statusText;
+    [SerializeField] private TextMeshProUGUI instructionText;
+    [SerializeField] private Slider pourProgressSlider;
+    [SerializeField] private Button resetButton;
+    [SerializeField] private Image tiltIndicator;
+    [SerializeField] private GameObject resultPanel;
+    [SerializeField] private TextMeshProUGUI resultText;
+    
+    [Header("=== BPCL BENEFITS PANEL ===")]
+    [SerializeField] private GameObject benefitsPanel;
+    [SerializeField] private TextMeshProUGUI benefitsText;
+    [SerializeField] private ScrollRect benefitsScrollRect;
+
+    #endregion
+
+    #region Serialized Fields - Animation Settings
+
+    [Header("=== ANIMATION SETTINGS ===")]
+    [SerializeField] private float smoothTransitionDuration = 1.0f;
+    [SerializeField] private float vibrationIntensity = 0.005f;
+    [SerializeField] private float vibrationFrequency = 30f;
+
+    #endregion
+
+    #region Serialized Fields - Audio
+
+    [Header("=== AUDIO ===")]
+    [SerializeField] private AudioSource audioSource;
+    [SerializeField] private AudioClip selectSound;
+    [SerializeField] private AudioClip pourSound;
+    [SerializeField] private AudioClip smoothEngineSound;
+    [SerializeField] private AudioClip roughEngineSound;
+    [SerializeField] private AudioClip warningSound;
+
+    #endregion
+
+    #region Private Fields
+
+    // Spawned objects
+    private GameObject spawnedEngine;
+    private GameObject spawnedBPCLBottle;
+    private GameObject spawnedLocalBottle;
+
+    // State tracking
+    private bool hasSpawned = false;
+    private bool planeDetected = false;
+    private OilType selectedOil = OilType.None;
+    private EngineState currentEngineState = EngineState.Idle;
+    private bool isPouringInProgress = false;
+    private bool hasPoured = false;
+
+    // Tilt tracking
+    private float smoothedAccelY = 0f;
+    private float pourProgress = 0f;
+
+    // AR data
+    private List<ARRaycastHit> raycastHits = new List<ARRaycastHit>();
+    private Vector3 detectedPlanePosition;
+
+    // Materials for highlighting
+    private Dictionary<GameObject, Material[]> originalMaterials = new Dictionary<GameObject, Material[]>();
+    private Material highlightMaterial;
+
+    // Engine animator reference
+    private AdvancedEngineAnimator engineAnimator;
+    private Vector3 engineOriginalPosition;
+    
+    // Oil tank hole reference
+    private Transform oilTankHoleTransform;
+    
+    // AR World Space Benefits Panel
+    private GameObject arBenefitsPanel;
+    private Canvas arBenefitsCanvas;
+    private TMPro.TextMeshProUGUI arBenefitsText;
+    
+    // Bottle animation state
+    private Vector3 bottleOriginalPosition;
+    private Quaternion bottleOriginalRotation;
+    private bool isBottleAnimating = false;
+
+    // Coroutine references
+    private Coroutine vibrationCoroutine;
+    private Coroutine transitionCoroutine;
+    private Coroutine benefitsScrollCoroutine;
+    private Coroutine bottlePourCoroutine;
+
+    // MAK Supreme Synthetic Lube Benefits Text
+    private const string BPCL_BENEFITS_TEXT = @"<size=130%><b><color=#00AA00>✓ MAK Supreme Synthetic Lube</color></b></size>
+
+<size=110%><color=#FFD700>Benefits of Synthetic Lube</color></size>
+
+<color=#00FF00>🔹 1. More Mileage</color>
+• Superior fuel efficiency
+• Reduced friction for better performance
+• Saves money on fuel costs
+
+<color=#00FF00>🔹 2. Long Engine Life</color>
+• Advanced protection against wear
+• Extends engine durability
+• Keeps engine running like new
+
+<color=#00FF00>🔹 3. All Weather Protection</color>
+• Performs in extreme hot & cold
+• Stable viscosity in all conditions
+• Ideal for Indian climate
+
+<color=#00FF00>🔹 4. Smooth & Easy Start of Car</color>
+• Quick oil flow at low temperatures
+• Instant engine lubrication
+• No more hard starts in winter
+
+<size=90%><i><color=#00AA00>MAK Lubricants - BPCL</color></i></size>
+<size=80%><color=#888888>Energizing Lives</color></size>";
+
+    // Mineral Based Lube De-merits Text
+    private const string LOCAL_DEMERITS_TEXT = @"<size=130%><b><color=#FF4444>⚠ Mineral Based Lube</color></b></size>
+
+<size=110%><color=#FF6600>De-merits of Mineral Lube</color></size>
+
+<color=#FF4444>🔸 1. Less Mileage</color>
+• Higher friction coefficient
+• Reduced fuel efficiency
+• Increased running costs
+
+<color=#FF4444>🔸 2. Decreased Engine Life</color>
+• Faster wear on engine parts
+• More deposits & sludge buildup
+• Shortened engine lifespan
+
+<color=#FF4444>🔸 3. Not for All Weather</color>
+• Poor performance in extreme temps
+• Thickens in cold weather
+• Thins out in high heat
+
+<color=#FF4444>🔸 4. Engine May Not Start Smoothly</color>
+• Slow oil flow when cold
+• Hard starts in winter
+• Delayed lubrication on startup
+
+<size=90%><i><color=#FF6600>Consider upgrading to Synthetic!</color></i></size>";
+
+    #endregion
+
+    #region Unity Lifecycle
+
+    private void Awake()
+    {
+        // Enable Enhanced Touch for new Input System
+        #if ENABLE_INPUT_SYSTEM
+        EnhancedTouchSupport.Enable();
+        
+        // CRITICAL: Enable Accelerometer sensor!
+        if (Accelerometer.current != null)
+        {
+            InputSystem.EnableDevice(Accelerometer.current);
+            Debug.Log("[AR_Oil] Accelerometer enabled!");
+        }
+        else
+        {
+            Debug.LogWarning("[AR_Oil] Accelerometer not found on this device!");
+        }
+        #endif
+        
+        // Create highlight material
+        highlightMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+        highlightMaterial.color = highlightColor;
+        highlightMaterial.SetFloat("_Smoothness", 0.8f);
+    }
+
+    private void Start()
+    {
+        InitializeComponents();
+        SetupUI();
+        UpdateInstructions("Scanning for horizontal surface...");
+        
+        // Debug: Log accelerometer status
+        #if ENABLE_INPUT_SYSTEM
+        if (Accelerometer.current != null)
+        {
+            Debug.Log($"[AR_Oil] Accelerometer status: {Accelerometer.current.enabled}");
+        }
+        #endif
+    }
+
+    private void Update()
+    {
+        if (!hasSpawned)
+        {
+            DetectPlaneAndSpawn();
+        }
+        else
+        {
+            HandleTouchInput();
+            HandleTiltDetection();
+            UpdateTiltIndicator();
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (highlightMaterial != null)
+        {
+            Destroy(highlightMaterial);
+        }
+    }
+
+    #endregion
+
+    #region Initialization
+
+    private void InitializeComponents()
+    {
+        // Auto-find AR components if not assigned
+        if (arPlaneManager == null)
+            arPlaneManager = FindFirstObjectByType<ARPlaneManager>();
+        
+        if (arRaycastManager == null)
+            arRaycastManager = FindFirstObjectByType<ARRaycastManager>();
+        
+        if (arCamera == null)
+            arCamera = Camera.main;
+
+        // Validate required components
+        if (arPlaneManager == null)
+            Debug.LogError("AR_OilInteraction: ARPlaneManager not found!");
+        
+        if (arRaycastManager == null)
+            Debug.LogError("AR_OilInteraction: ARRaycastManager not found!");
+    }
+
+    private void SetupUI()
+    {
+        if (resetButton != null)
+        {
+            resetButton.onClick.AddListener(ResetScene);
+        }
+
+        if (pourProgressSlider != null)
+        {
+            pourProgressSlider.value = 0;
+            pourProgressSlider.gameObject.SetActive(false);
+        }
+
+        if (resultPanel != null)
+        {
+            resultPanel.SetActive(false);
+        }
+
+        if (tiltIndicator != null)
+        {
+            tiltIndicator.gameObject.SetActive(false);
+        }
+
+        if (benefitsPanel != null)
+        {
+            benefitsPanel.SetActive(false);
+        }
+    }
+
+    #endregion
+
+    #region Plane Detection & Spawning
+
+    private void DetectPlaneAndSpawn()
+    {
+        if (planeDetected) return;
+
+        // Check if any planes have been detected
+        foreach (var plane in arPlaneManager.trackables)
+        {
+            if (plane.alignment == UnityEngine.XR.ARSubsystems.PlaneAlignment.HorizontalUp)
+            {
+                planeDetected = true;
+                detectedPlanePosition = plane.center;
+                SpawnObjects();
+                break;
+            }
+        }
+    }
+
+    private void SpawnObjects()
+    {
+        if (hasSpawned) return;
+
+        // CRITICAL: Get XR Origin to spawn objects relative to AR tracking space
+        Transform spawnParent = GetARSpawnParent();
+
+        // Calculate spawn position in front of camera
+        Vector3 cameraForward = arCamera.transform.forward;
+        cameraForward.y = 0;
+        
+        // SAFETY: If camera forward is zero (unlikely), use world forward
+        if (cameraForward.sqrMagnitude < 0.01f)
+        {
+            cameraForward = Vector3.forward;
+            Debug.LogWarning("[AR_Oil] Camera forward was zero, using world forward");
+        }
+        cameraForward.Normalize();
+
+        // CRITICAL FIX: Use the detected plane position, not camera position for Y
+        // Camera might be at origin (0,0,0) if tracking hasn't started
+        Vector3 spawnPosition;
+        
+        if (detectedPlanePosition.sqrMagnitude > 0.001f)
+        {
+            // Use plane position as base
+            spawnPosition = detectedPlanePosition + cameraForward * spawnDistance;
+        }
+        else
+        {
+            // Fallback: spawn in front of camera at reasonable height
+            spawnPosition = arCamera.transform.position + cameraForward * spawnDistance;
+            spawnPosition.y = arCamera.transform.position.y - 0.5f; // Below camera
+        }
+        
+        spawnPosition.y = detectedPlanePosition.y + heightOffset;
+
+        Debug.Log($"[AR_Oil] ========== SPAWN DEBUG ==========");
+        Debug.Log($"[AR_Oil] Camera Position: {arCamera.transform.position}");
+        Debug.Log($"[AR_Oil] Camera Forward: {arCamera.transform.forward}");
+        Debug.Log($"[AR_Oil] Spawn Position: {spawnPosition}");
+        Debug.Log($"[AR_Oil] Plane Position: {detectedPlanePosition}");
+        Debug.Log($"[AR_Oil] Spawn Parent: {(spawnParent != null ? spawnParent.name : "WORLD ROOT")}");
+
+        // Spawn Engine - PARENT TO AR SPACE, NOT UI!
+        if (enginePrefab != null)
+        {
+            // Instantiate with NO parent first to ensure world space
+            spawnedEngine = Instantiate(enginePrefab);
+            
+            // Set position in WORLD SPACE
+            spawnedEngine.transform.SetParent(null);
+            spawnedEngine.transform.position = spawnPosition;
+            spawnedEngine.transform.rotation = Quaternion.identity;
+            spawnedEngine.transform.localScale = Vector3.one * objectScale;
+            
+            // Remove any RectTransform that might be on the prefab (UI component!)
+            RectTransform rt = spawnedEngine.GetComponent<RectTransform>();
+            if (rt != null)
+            {
+                Debug.LogError("[AR_Oil] Engine prefab has RectTransform! This is a UI prefab, not a 3D prefab!");
+                // Try to fix by converting to regular Transform
+                DestroyImmediate(rt);
+            }
+            
+            // Ensure Default layer, NOT UI layer
+            int defaultLayer = LayerMask.NameToLayer("Default");
+            spawnedEngine.layer = defaultLayer;
+            SetLayerRecursively(spawnedEngine, defaultLayer);
+            
+            // Face the camera
+            Vector3 lookPos = arCamera.transform.position;
+            lookPos.y = spawnedEngine.transform.position.y;
+            spawnedEngine.transform.LookAt(lookPos);
+            spawnedEngine.transform.Rotate(0, 180, 0); // Face towards camera
+            
+            engineOriginalPosition = spawnedEngine.transform.position;
+            engineAnimator = spawnedEngine.GetComponent<AdvancedEngineAnimator>();
+            
+            // Validate renderers
+            Renderer[] renderers = spawnedEngine.GetComponentsInChildren<Renderer>(true);
+            MeshFilter[] meshFilters = spawnedEngine.GetComponentsInChildren<MeshFilter>(true);
+            
+            Debug.Log($"[AR_Oil] Engine spawned: Position={spawnPosition}, Scale={objectScale}");
+            Debug.Log($"[AR_Oil] Engine has {renderers.Length} renderers, {meshFilters.Length} mesh filters");
+            Debug.Log($"[AR_Oil] Engine parent: {(spawnedEngine.transform.parent != null ? spawnedEngine.transform.parent.name : "WORLD ROOT (correct!)")}");
+            Debug.Log($"[AR_Oil] Engine layer: {LayerMask.LayerToName(spawnedEngine.layer)}");
+            
+            // Enable all renderers
+            foreach (var r in renderers)
+            {
+                r.enabled = true;
+                r.gameObject.SetActive(true);
+                r.gameObject.layer = defaultLayer;
+                Debug.Log($"[AR_Oil] Renderer: {r.gameObject.name}, Material: {(r.sharedMaterial != null ? r.sharedMaterial.name : "NULL")}");
+            }
+            
+            SetupEngineParticles();
+            
+            // Find oil tank hole on the engine
+            FindOilTankHole();
+        }
+        else
+        {
+            Debug.LogError("[AR_Oil] Engine Prefab is NULL! Assign in Inspector!");
+        }
+
+        // Calculate bottle positions (left and right of engine)
+        Vector3 rightDir = Vector3.Cross(Vector3.up, cameraForward).normalized;
+        int defaultLayerIndex = LayerMask.NameToLayer("Default");
+
+        // Spawn BPCL Bottle (left side)
+        if (bpclBottlePrefab != null)
+        {
+            Vector3 bpclPosition = spawnPosition - rightDir * bottleSpacing;
+            
+            spawnedBPCLBottle = Instantiate(bpclBottlePrefab);
+            spawnedBPCLBottle.transform.SetParent(null);
+            spawnedBPCLBottle.transform.position = bpclPosition;
+            spawnedBPCLBottle.transform.rotation = Quaternion.identity;
+            spawnedBPCLBottle.transform.localScale = Vector3.one * objectScale * 0.6f; // Slightly larger bottles
+            spawnedBPCLBottle.name = "BPCL_Oil_Bottle";
+            
+            // Remove RectTransform if present
+            RectTransform rt = spawnedBPCLBottle.GetComponent<RectTransform>();
+            if (rt != null)
+            {
+                Debug.LogError("[AR_Oil] BPCL prefab has RectTransform! This is a UI prefab!");
+                DestroyImmediate(rt);
+            }
+            
+            spawnedBPCLBottle.layer = defaultLayerIndex;
+            SetLayerRecursively(spawnedBPCLBottle, defaultLayerIndex);
+            
+            Renderer[] renderers = spawnedBPCLBottle.GetComponentsInChildren<Renderer>(true);
+            foreach (var r in renderers)
+            {
+                r.enabled = true;
+                r.gameObject.SetActive(true);
+                r.gameObject.layer = defaultLayerIndex;
+            }
+            
+            Debug.Log($"[AR_Oil] BPCL Bottle spawned at: {bpclPosition}, Renderers: {renderers.Length}");
+            
+            StoreMaterials(spawnedBPCLBottle);
+            AddBottleCollider(spawnedBPCLBottle);
+        }
+        else
+        {
+            Debug.LogError("[AR_Oil] BPCL Bottle Prefab is NULL!");
+        }
+
+        // Spawn Local Bottle (right side)
+        if (localBottlePrefab != null)
+        {
+            Vector3 localPosition = spawnPosition + rightDir * bottleSpacing;
+            
+            spawnedLocalBottle = Instantiate(localBottlePrefab);
+            spawnedLocalBottle.transform.SetParent(null);
+            spawnedLocalBottle.transform.position = localPosition;
+            spawnedLocalBottle.transform.rotation = Quaternion.identity;
+            spawnedLocalBottle.transform.localScale = Vector3.one * objectScale * 0.6f;
+            spawnedLocalBottle.name = "Local_Oil_Bottle";
+            
+            // Remove RectTransform if present
+            RectTransform rt = spawnedLocalBottle.GetComponent<RectTransform>();
+            if (rt != null)
+            {
+                Debug.LogError("[AR_Oil] Local prefab has RectTransform! This is a UI prefab!");
+                DestroyImmediate(rt);
+            }
+            
+            spawnedLocalBottle.layer = defaultLayerIndex;
+            SetLayerRecursively(spawnedLocalBottle, defaultLayerIndex);
+            
+            Renderer[] renderers = spawnedLocalBottle.GetComponentsInChildren<Renderer>(true);
+            foreach (var r in renderers)
+            {
+                r.enabled = true;
+                r.gameObject.SetActive(true);
+                r.gameObject.layer = defaultLayerIndex;
+            }
+            
+            Debug.Log($"[AR_Oil] Local Bottle spawned at: {localPosition}, Renderers: {renderers.Length}");
+            
+            StoreMaterials(spawnedLocalBottle);
+            AddBottleCollider(spawnedLocalBottle);
+        }
+        else
+        {
+            Debug.LogError("[AR_Oil] Local Bottle Prefab is NULL!");
+        }
+
+        hasSpawned = true;
+        
+        // Verify objects are NOT under a Canvas
+        VerifyWorldSpaceSpawn();
+        
+        // Disable plane visualization for cleaner view
+        DisablePlaneVisualization();
+        
+        UpdateInstructions("Tap a bottle to select it");
+        UpdateStatus("Objects spawned successfully");
+    }
+    
+    /// <summary>
+    /// Get the AR spawn parent (XR Origin if available, otherwise null for world root)
+    /// </summary>
+    private Transform GetARSpawnParent()
+    {
+        // Try XR Origin first (newer AR Foundation)
+        var xrOrigin = FindFirstObjectByType<Unity.XR.CoreUtils.XROrigin>();
+        if (xrOrigin != null)
+        {
+            return xrOrigin.transform;
+        }
+        
+        // Try AR Session Origin (older AR Foundation)
+        var arSessionOrigin = FindFirstObjectByType<ARSessionOrigin>();
+        if (arSessionOrigin != null)
+        {
+            return arSessionOrigin.transform;
+        }
+        
+        // Fallback to world root
+        return null;
+    }
+    
+    /// <summary>
+    /// Verify spawned objects are NOT under a Canvas (which would make them UI elements)
+    /// </summary>
+    private void VerifyWorldSpaceSpawn()
+    {
+        Debug.Log("[AR_Oil] ========== SPAWN VERIFICATION ==========");
+        
+        if (spawnedEngine != null)
+        {
+            Canvas parentCanvas = spawnedEngine.GetComponentInParent<Canvas>();
+            if (parentCanvas != null)
+            {
+                Debug.LogError($"[AR_Oil] ENGINE IS UNDER A CANVAS! Canvas: {parentCanvas.gameObject.name}");
+                Debug.LogError("[AR_Oil] FIX: Move AR_OilInteraction_Manager OUT of the Canvas hierarchy!");
+            }
+            else
+            {
+                Debug.Log("[AR_Oil] ✓ Engine is NOT under Canvas (correct!)");
+            }
+            
+            Debug.Log($"[AR_Oil] Engine World Position: {spawnedEngine.transform.position}");
+            Debug.Log($"[AR_Oil] Engine Local Position: {spawnedEngine.transform.localPosition}");
+            Debug.Log($"[AR_Oil] Engine World Scale: {spawnedEngine.transform.lossyScale}");
+        }
+        
+        if (spawnedBPCLBottle != null)
+        {
+            Canvas parentCanvas = spawnedBPCLBottle.GetComponentInParent<Canvas>();
+            if (parentCanvas != null)
+            {
+                Debug.LogError($"[AR_Oil] BPCL BOTTLE IS UNDER A CANVAS! Canvas: {parentCanvas.gameObject.name}");
+            }
+            else
+            {
+                Debug.Log("[AR_Oil] ✓ BPCL Bottle is NOT under Canvas (correct!)");
+            }
+        }
+        
+        // Log camera info for debugging
+        Debug.Log($"[AR_Oil] Camera Culling Mask: {arCamera.cullingMask}");
+        Debug.Log($"[AR_Oil] Default layer included in culling: {((arCamera.cullingMask & (1 << LayerMask.NameToLayer("Default"))) != 0)}");
+    }
+
+    private void SetupEngineParticles()
+    {
+        if (spawnedEngine == null) return;
+
+        // Try to find existing particle systems on engine
+        if (smokeParticles == null)
+        {
+            Transform smokeTransform = spawnedEngine.transform.Find("SmokeParticles");
+            if (smokeTransform != null)
+                smokeParticles = smokeTransform.GetComponent<ParticleSystem>();
+        }
+
+        if (blackSmokeParticles == null)
+        {
+            Transform blackSmokeTransform = spawnedEngine.transform.Find("BlackSmokeParticles");
+            if (blackSmokeTransform != null)
+                blackSmokeParticles = blackSmokeTransform.GetComponent<ParticleSystem>();
+        }
+
+        // Stop all smoke initially
+        if (smokeParticles != null) smokeParticles.Stop();
+        if (blackSmokeParticles != null) blackSmokeParticles.Stop();
+    }
+    
+    /// <summary>
+    /// Find the oil tank hole on the engine for pouring animation
+    /// </summary>
+    private void FindOilTankHole()
+    {
+        if (spawnedEngine == null) return;
+        
+        // Try to find by name
+        oilTankHoleTransform = spawnedEngine.transform.Find(oilTankHoleName);
+        
+        // If not found, search recursively
+        if (oilTankHoleTransform == null)
+        {
+            oilTankHoleTransform = FindChildRecursive(spawnedEngine.transform, oilTankHoleName);
+        }
+        
+        // If still not found, try common names
+        if (oilTankHoleTransform == null)
+        {
+            string[] commonNames = { "OilCap", "OilHole", "OilFill", "OilTank", "FillHole", "EngineTop" };
+            foreach (string name in commonNames)
+            {
+                oilTankHoleTransform = FindChildRecursive(spawnedEngine.transform, name);
+                if (oilTankHoleTransform != null)
+                {
+                    Debug.Log($"[AR_Oil] Found oil tank hole with name: {name}");
+                    break;
+                }
+            }
+        }
+        
+        if (oilTankHoleTransform != null)
+        {
+            Debug.Log($"[AR_Oil] Oil tank hole found: {oilTankHoleTransform.name} at {oilTankHoleTransform.position}");
+        }
+        else
+        {
+            Debug.LogWarning("[AR_Oil] Oil tank hole not found on engine. Using offset position.");
+        }
+    }
+    
+    private Transform FindChildRecursive(Transform parent, string name)
+    {
+        foreach (Transform child in parent)
+        {
+            if (child.name.ToLower().Contains(name.ToLower()))
+                return child;
+            
+            Transform found = FindChildRecursive(child, name);
+            if (found != null)
+                return found;
+        }
+        return null;
+    }
+    
+    /// <summary>
+    /// Get the world position of the oil tank hole
+    /// </summary>
+    private Vector3 GetOilTankHolePosition()
+    {
+        if (oilTankHoleTransform != null)
+        {
+            return oilTankHoleTransform.position;
+        }
+        else if (spawnedEngine != null)
+        {
+            // Use offset from engine center
+            return spawnedEngine.transform.position + 
+                   spawnedEngine.transform.TransformDirection(oilTankHoleOffset) * objectScale;
+        }
+        return Vector3.zero;
+    }
+
+    private void AddBottleCollider(GameObject bottle)
+    {
+        if (bottle.GetComponent<Collider>() == null)
+        {
+            BoxCollider collider = bottle.AddComponent<BoxCollider>();
+            
+            // Auto-calculate bounds from renderers
+            Renderer[] renderers = bottle.GetComponentsInChildren<Renderer>();
+            if (renderers.Length > 0)
+            {
+                Bounds bounds = renderers[0].bounds;
+                foreach (var renderer in renderers)
+                {
+                    bounds.Encapsulate(renderer.bounds);
+                }
+                
+                collider.center = bottle.transform.InverseTransformPoint(bounds.center);
+                collider.size = bounds.size / bottle.transform.lossyScale.x;
+            }
+        }
+    }
+
+    private void DisablePlaneVisualization()
+    {
+        foreach (var plane in arPlaneManager.trackables)
+        {
+            plane.gameObject.SetActive(false);
+        }
+    }
+
+    #endregion
+
+    #region Touch Input & Selection
+
+    private void HandleTouchInput()
+    {
+        if (isPouringInProgress || hasPoured) return;
+
+        #if ENABLE_INPUT_SYSTEM
+        // New Input System touch handling
+        int touchCount = Touch.activeTouches.Count;
+        
+        // Debug: Log touch count occasionally
+        if (Time.frameCount % 120 == 0 && touchCount > 0)
+        {
+            Debug.Log($"[AR_Oil] Active touches: {touchCount}");
+        }
+        
+        if (touchCount > 0)
+        {
+            var touch = Touch.activeTouches[0];
+            
+            if (touch.phase == UnityEngine.InputSystem.TouchPhase.Began)
+            {
+                Debug.Log($"[AR_Oil] Touch BEGAN at: {touch.screenPosition}");
+                ProcessTouch(touch.screenPosition);
+            }
+        }
+        #else
+        // Legacy Input System
+        if (Input.touchCount > 0)
+        {
+            UnityEngine.Touch touch = Input.GetTouch(0);
+            
+            if (touch.phase == TouchPhase.Began)
+            {
+                Debug.Log($"[AR_Oil] Legacy Touch at: {touch.position}");
+                ProcessTouch(touch.position);
+            }
+        }
+        #endif
+
+        // Editor mouse support for testing
+        #if UNITY_EDITOR
+        if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
+        {
+            ProcessTouch(Mouse.current.position.ReadValue());
+        }
+        #endif
+    }
+
+    private void ProcessTouch(Vector2 screenPosition)
+    {
+        Debug.Log($"[AR_Oil] Touch detected at: {screenPosition}");
+        
+        Ray ray = arCamera.ScreenPointToRay(screenPosition);
+        RaycastHit hit;
+
+        if (Physics.Raycast(ray, out hit, 100f))
+        {
+            GameObject hitObject = hit.collider.gameObject;
+            Debug.Log($"[AR_Oil] Raycast HIT: {hitObject.name}");
+
+            // Check if hit object is a bottle
+            if (IsBottleOrChild(hitObject, spawnedBPCLBottle))
+            {
+                HandleBottleTap(OilType.BPCL);
+            }
+            else if (IsBottleOrChild(hitObject, spawnedLocalBottle))
+            {
+                HandleBottleTap(OilType.Local);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Handle bottle tap - select/deselect toggle
+    /// </summary>
+    private void HandleBottleTap(OilType tappedOil)
+    {
+        // If tapping the already selected bottle, deselect it
+        if (selectedOil == tappedOil)
+        {
+            DeselectBottle();
+            return;
+        }
+        
+        // If a different bottle was selected, deselect it first
+        if (selectedOil != OilType.None)
+        {
+            DeselectBottle();
+        }
+        
+        // If previous pour completed, reset engine before new pour
+        if (hasPoured)
+        {
+            ResetEngineState();
+            hasPoured = false;
+        }
+        
+        // Select the new bottle
+        SelectBottle(tappedOil);
+    }
+    
+    /// <summary>
+    /// Reset engine visual state without resetting the whole scene
+    /// </summary>
+    private void ResetEngineState()
+    {
+        Debug.Log("[AR_Oil] Resetting engine state for new pour");
+        
+        // Stop any running engine effects
+        StopAllCoroutines();
+        
+        // Reset engine animation
+        if (spawnedEngine != null)
+        {
+            Animator engineAnimator = spawnedEngine.GetComponentInChildren<Animator>();
+            if (engineAnimator != null)
+            {
+                engineAnimator.SetTrigger("Idle");
+            }
+        }
+        
+        // Stop smoke particles
+        if (smokeParticles != null)
+        {
+            smokeParticles.Stop();
+            smokeParticles.Clear();
+        }
+        
+        // Hide any active panels
+        if (resultPanel != null)
+        {
+            resultPanel.SetActive(false);
+        }
+        
+        // Hide AR benefits panel if showing
+        HideARBenefitsPanel();
+        
+        // Hide benefits panel in UI
+        if (benefitsPanel != null)
+        {
+            benefitsPanel.SetActive(false);
+        }
+        
+        pourProgress = 0f;
+        isPouringInProgress = false;
+    }
+    
+    /// <summary>
+    /// Deselect the currently held bottle
+    /// </summary>
+    private void DeselectBottle()
+    {
+        if (selectedOil == OilType.None) return;
+        
+        Debug.Log($"[AR_Oil] Deselecting bottle: {selectedOil}");
+        
+        // Restore original materials
+        GameObject bottle = GetBottleByType(selectedOil);
+        RestoreOriginalMaterials(bottle);
+        
+        // Reset bottle position if it was being moved
+        if (bottle != null && bottleOriginalPosition != Vector3.zero)
+        {
+            StartCoroutine(ReturnBottleToOriginal(bottle));
+        }
+        
+        // Stop any pouring in progress
+        if (isPouringInProgress)
+        {
+            isPouringInProgress = false;
+            pourProgress = 0f;
+            if (pouringParticles != null) pouringParticles.Stop();
+        }
+        
+        // Clear selection
+        selectedOil = OilType.None;
+        
+        // Hide UI elements
+        if (tiltIndicator != null)
+            tiltIndicator.gameObject.SetActive(false);
+        
+        if (pourProgressSlider != null)
+        {
+            pourProgressSlider.value = 0;
+            pourProgressSlider.gameObject.SetActive(false);
+        }
+        
+        UpdateStatus("Tap a bottle to pick it up");
+        UpdateInstructions("Select a bottle to begin");
+        
+        PlaySound(selectSound); // Deselect feedback
+    }
+
+    private bool IsBottleOrChild(GameObject hitObject, GameObject bottle)
+    {
+        if (bottle == null) return false;
+        
+        Transform current = hitObject.transform;
+        while (current != null)
+        {
+            if (current.gameObject == bottle)
+                return true;
+            current = current.parent;
+        }
+        return false;
+    }
+
+    private void SelectBottle(OilType oilType)
+    {
+        Debug.Log($"[AR_Oil] Selecting bottle: {oilType} (User is now HOLDING this bottle)");
+        
+        selectedOil = oilType;
+        GameObject selectedBottle = GetBottleByType(oilType);
+        
+        // Store original position for this bottle
+        if (selectedBottle != null)
+        {
+            bottleOriginalPosition = selectedBottle.transform.position;
+            bottleOriginalRotation = selectedBottle.transform.rotation;
+        }
+        
+        // Highlight selected bottle (visual feedback that user is "holding" it)
+        HighlightObject(selectedBottle);
+        
+        // Play selection sound
+        PlaySound(selectSound);
+
+        // Update UI - emphasize that user is holding the bottle
+        string bottleName = oilType == OilType.BPCL ? "MAK Premium Oil" : "Local Oil";
+        UpdateStatus($"Holding: {bottleName}");
+        UpdateInstructions("Tilt phone forward to pour into engine");
+
+        // Show tilt indicator
+        if (tiltIndicator != null)
+        {
+            tiltIndicator.gameObject.SetActive(true);
+        }
+
+        if (pourProgressSlider != null)
+        {
+            pourProgressSlider.gameObject.SetActive(true);
+            pourProgressSlider.value = 0;
+        }
+    }
+
+    private GameObject GetBottleByType(OilType oilType)
+    {
+        return oilType == OilType.BPCL ? spawnedBPCLBottle : spawnedLocalBottle;
+    }
+
+    #endregion
+
+    #region Material Management
+
+    private void StoreMaterials(GameObject obj)
+    {
+        if (obj == null) return;
+
+        Renderer[] renderers = obj.GetComponentsInChildren<Renderer>();
+        List<Material> materials = new List<Material>();
+        
+        foreach (var renderer in renderers)
+        {
+            foreach (var mat in renderer.materials)
+            {
+                materials.Add(new Material(mat));
+            }
+        }
+        
+        originalMaterials[obj] = materials.ToArray();
+    }
+
+    private void HighlightObject(GameObject obj)
+    {
+        if (obj == null) return;
+
+        Renderer[] renderers = obj.GetComponentsInChildren<Renderer>();
+        foreach (var renderer in renderers)
+        {
+            Material[] mats = renderer.materials;
+            for (int i = 0; i < mats.Length; i++)
+            {
+                mats[i].SetColor("_BaseColor", highlightColor);
+                mats[i].SetColor("_EmissionColor", highlightColor * 0.3f);
+            }
+            renderer.materials = mats;
+        }
+    }
+
+    private void RestoreOriginalMaterials(GameObject obj)
+    {
+        if (obj == null || !originalMaterials.ContainsKey(obj)) return;
+
+        Renderer[] renderers = obj.GetComponentsInChildren<Renderer>();
+        int matIndex = 0;
+        Material[] stored = originalMaterials[obj];
+
+        foreach (var renderer in renderers)
+        {
+            Material[] mats = renderer.materials;
+            for (int i = 0; i < mats.Length && matIndex < stored.Length; i++)
+            {
+                mats[i].CopyPropertiesFromMaterial(stored[matIndex]);
+                matIndex++;
+            }
+            renderer.materials = mats;
+        }
+    }
+
+    #endregion
+
+    #region Tilt Detection & Pouring
+    
+    private int tiltDebugCounter = 0;
+
+    private void HandleTiltDetection()
+    {
+        if (selectedOil == OilType.None || hasPoured) return;
+
+        // Get accelerometer reading
+        float currentAccelY = 0f;
+        bool accelerometerAvailable = false;
+        
+        #if ENABLE_INPUT_SYSTEM
+        // New Input System - use Accelerometer sensor
+        if (Accelerometer.current != null)
+        {
+            // Make sure it's enabled
+            if (!Accelerometer.current.enabled)
+            {
+                InputSystem.EnableDevice(Accelerometer.current);
+            }
+            
+            currentAccelY = Accelerometer.current.acceleration.ReadValue().y;
+            accelerometerAvailable = true;
+        }
+        else
+        {
+            // Fallback: Try to use gravity sensor or linear acceleration
+            if (GravitySensor.current != null)
+            {
+                if (!GravitySensor.current.enabled)
+                    InputSystem.EnableDevice(GravitySensor.current);
+                currentAccelY = GravitySensor.current.gravity.ReadValue().y;
+                accelerometerAvailable = true;
+            }
+        }
+        #else
+        // Legacy Input System
+        currentAccelY = Input.acceleration.y;
+        accelerometerAvailable = true;
+        #endif
+
+        // Debug logging every 60 frames (once per second at 60fps)
+        tiltDebugCounter++;
+        if (tiltDebugCounter >= 60)
+        {
+            tiltDebugCounter = 0;
+            Debug.Log($"[AR_Oil] TILT DEBUG: AccelY={currentAccelY:F3}, Smoothed={smoothedAccelY:F3}, Threshold={tiltThreshold}, Available={accelerometerAvailable}");
+            Debug.Log($"[AR_Oil] Selected Oil: {selectedOil}, IsPouringInProgress: {isPouringInProgress}, HasPoured: {hasPoured}");
+        }
+
+        // Smooth the accelerometer reading
+        smoothedAccelY = Mathf.Lerp(smoothedAccelY, currentAccelY, accelerometerSmoothing);
+        
+        // CHECK DISTANCE FROM ENGINE - if too far, fail the pour
+        if (isPouringInProgress && spawnedEngine != null)
+        {
+            float distanceToEngine = Vector3.Distance(arCamera.transform.position, spawnedEngine.transform.position);
+            if (distanceToEngine > maxPourDistance)
+            {
+                // Too far from engine - Wrong Pouring!
+                FailPour("Wrong Pouring! Stay closer to the engine.");
+                return;
+            }
+        }
+
+        // Check if tilted enough to pour
+        // Phone UPRIGHT (portrait): Y ≈ 0 to -0.3
+        // Phone TILTED FORWARD (top down): Y ≈ -0.5 to -1.0
+        // Phone FLAT (screen up): Y ≈ -1.0
+        // We want: tilt TOP of phone DOWN to pour
+        // So check if Y is MORE NEGATIVE than threshold
+        
+        bool isTilting = smoothedAccelY < tiltThreshold;
+        
+        if (isTilting)
+        {
+            // Check distance before starting pour
+            if (!isPouringInProgress && spawnedEngine != null)
+            {
+                float distanceToEngine = Vector3.Distance(arCamera.transform.position, spawnedEngine.transform.position);
+                if (distanceToEngine > maxPourDistance)
+                {
+                    UpdateStatus("Move closer to the engine to pour");
+                    return;
+                }
+            }
+            
+            if (!isPouringInProgress)
+            {
+                Debug.Log($"[AR_Oil] Starting pour! AccelY={smoothedAccelY:F3}, Threshold={tiltThreshold}");
+                StartPouringTiltControlled();
+            }
+
+            // Progress the pour based on tilt amount
+            float tiltIntensity = Mathf.InverseLerp(tiltThreshold, -1f, smoothedAccelY);
+            pourProgress += Time.deltaTime / pourDuration * (0.5f + tiltIntensity * 0.5f);
+            pourProgress = Mathf.Clamp01(pourProgress);
+            
+            if (pourProgressSlider != null)
+            {
+                pourProgressSlider.value = pourProgress;
+            }
+
+            // Update bottle pour animation based on progress
+            UpdateTiltControlledPour(GetBottleByType(selectedOil), pourProgress);
+
+            // Complete pour when progress reaches 1
+            if (pourProgress >= 1f)
+            {
+                CompletePour();
+            }
+        }
+        else
+        {
+            // Slowly reset if not tilting enough
+            if (isPouringInProgress && pourProgress < 1f && pourProgress > 0f)
+            {
+                pourProgress = Mathf.Max(0, pourProgress - Time.deltaTime * 0.3f);
+                
+                if (pourProgressSlider != null)
+                {
+                    pourProgressSlider.value = pourProgress;
+                }
+
+                // Return bottle toward original position
+                UpdateTiltControlledPour(GetBottleByType(selectedOil), pourProgress);
+                
+                // If fully reset, stop pouring state
+                if (pourProgress <= 0.01f)
+                {
+                    isPouringInProgress = false;
+                    pourProgress = 0f;
+                    if (pouringParticles != null) pouringParticles.Stop();
+                }
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Fail the pour attempt with an error message
+    /// </summary>
+    private void FailPour(string message)
+    {
+        Debug.LogWarning($"[AR_Oil] POUR FAILED: {message}");
+        
+        // Stop pouring
+        isPouringInProgress = false;
+        pourProgress = 0f;
+        
+        // Stop particles
+        if (pouringParticles != null) pouringParticles.Stop();
+        
+        // Reset bottle to original position
+        GameObject bottle = GetBottleByType(selectedOil);
+        if (bottle != null)
+        {
+            StartCoroutine(ReturnBottleToOriginal(bottle));
+        }
+        
+        // Show error message
+        UpdateStatus($"<color=red>{message}</color>");
+        UpdateInstructions("Stay close to engine and tilt to pour");
+        
+        // Play warning sound
+        PlaySound(warningSound);
+        
+        // Reset slider
+        if (pourProgressSlider != null)
+        {
+            pourProgressSlider.value = 0;
+        }
+        
+        // Show alert panel briefly
+        ShowWrongPouringAlert(message);
+    }
+    
+    /// <summary>
+    /// Show a prominent "Wrong Pouring" alert
+    /// </summary>
+    private void ShowWrongPouringAlert(string message)
+    {
+        StartCoroutine(ShowAlertCoroutine(message));
+    }
+    
+    private IEnumerator ShowAlertCoroutine(string message)
+    {
+        // Use result panel to show alert
+        if (resultPanel != null)
+        {
+            resultPanel.SetActive(true);
+            
+            if (resultText != null)
+            {
+                resultText.text = $"<color=red><size=150%>⚠</size></color>\n{message}";
+            }
+            
+            // Flash red
+            Image panelImage = resultPanel.GetComponent<Image>();
+            if (panelImage != null)
+            {
+                panelImage.color = new Color(0.5f, 0.1f, 0.1f, 0.9f);
+            }
+        }
+        
+        yield return new WaitForSeconds(2f);
+        
+        // Hide alert
+        if (resultPanel != null)
+        {
+            resultPanel.SetActive(false);
+        }
+    }
+    
+    /// <summary>
+    /// Start tilt-controlled pouring mode
+    /// </summary>
+    private void StartPouringTiltControlled()
+    {
+        isPouringInProgress = true;
+        PlaySound(pourSound);
+        UpdateStatus("Tilt to pour oil...");
+        
+        // Store original bottle position and rotation
+        GameObject bottle = GetBottleByType(selectedOil);
+        if (bottle != null)
+        {
+            bottleOriginalPosition = bottle.transform.position;
+            bottleOriginalRotation = bottle.transform.rotation;
+        }
+        
+        Debug.Log($"[AR_Oil] Pour started. Original pos: {bottleOriginalPosition}");
+    }
+    
+    /// <summary>
+    /// Update bottle position/rotation based on pour progress (0-1)
+    /// Bottle smoothly moves from original position to pour position
+    /// </summary>
+    private void UpdateTiltControlledPour(GameObject bottle, float progress)
+    {
+        if (bottle == null || spawnedEngine == null) return;
+        
+        // Get target pour position
+        Vector3 tankHolePos = GetOilTankHolePosition();
+        
+        // Calculate pour position (above the oil tank hole)
+        Vector3 pourTargetPos = tankHolePos + Vector3.up * pourHeightAboveTank;
+        
+        // Calculate intermediate lift position (arc peak)
+        Vector3 midPoint = Vector3.Lerp(bottleOriginalPosition, pourTargetPos, 0.5f);
+        midPoint.y += bottleLiftHeight;
+        
+        // Use bezier-like curve for smooth arc movement
+        Vector3 targetPos;
+        if (progress < 0.5f)
+        {
+            // First half: move from start toward midpoint
+            float t = progress * 2f; // 0 to 1 for first half
+            targetPos = Vector3.Lerp(bottleOriginalPosition, midPoint, t);
+        }
+        else
+        {
+            // Second half: move from midpoint toward pour position
+            float t = (progress - 0.5f) * 2f; // 0 to 1 for second half
+            targetPos = Vector3.Lerp(midPoint, pourTargetPos, t);
+        }
+        
+        // Calculate pour rotation
+        Vector3 toTankHole = (tankHolePos - pourTargetPos).normalized;
+        if (toTankHole.sqrMagnitude < 0.01f) toTankHole = Vector3.down;
+        
+        // Bottle tilts more as progress increases
+        float tiltAngle = Mathf.Lerp(0f, 130f, progress); // 0° to 130° tilt
+        
+        // Create rotation: bottle points toward tank hole
+        Vector3 bottleForward = Vector3.Lerp(Vector3.up, toTankHole, progress);
+        Quaternion targetRot = Quaternion.LookRotation(
+            Vector3.Cross(Vector3.right, bottleForward).normalized,
+            -bottleForward
+        );
+        targetRot *= Quaternion.Euler(tiltAngle, 0, 0);
+        
+        // Smoothly interpolate to target (not instant, feels better)
+        float smoothSpeed = 8f;
+        bottle.transform.position = Vector3.Lerp(bottle.transform.position, targetPos, Time.deltaTime * smoothSpeed);
+        bottle.transform.rotation = Quaternion.Slerp(bottle.transform.rotation, targetRot, Time.deltaTime * smoothSpeed);
+        
+        // Handle pouring particles and oil stream
+        if (progress > 0.6f) // Start pouring when bottle is tilted enough
+        {
+            if (pouringParticles != null && !pouringParticles.isPlaying)
+            {
+                pouringParticles.Play();
+            }
+            
+            // Update particle position to bottle tip
+            if (pouringParticles != null)
+            {
+                Vector3 spoutOffset = bottle.transform.up * -0.1f * objectScale;
+                pouringParticles.transform.position = bottle.transform.position + spoutOffset;
+                pouringParticles.transform.rotation = Quaternion.LookRotation(Vector3.down);
+            }
+        }
+        else
+        {
+            if (pouringParticles != null && pouringParticles.isPlaying)
+            {
+                pouringParticles.Stop();
+            }
+        }
+    }
+
+    private void CompletePour()
+    {
+        isPouringInProgress = false;
+        hasPoured = true;
+
+        // Stop pouring particles
+        if (pouringParticles != null)
+        {
+            pouringParticles.Stop();
+        }
+
+        // Hide tilt indicator
+        if (tiltIndicator != null)
+        {
+            tiltIndicator.gameObject.SetActive(false);
+        }
+        
+        // Hide pour slider
+        if (pourProgressSlider != null)
+        {
+            pourProgressSlider.gameObject.SetActive(false);
+        }
+        
+        // Return bottle to original position smoothly
+        GameObject bottle = GetBottleByType(selectedOil);
+        if (bottle != null)
+        {
+            StartCoroutine(ReturnBottleToOriginal(bottle));
+        }
+        
+        // Restore bottle materials
+        RestoreOriginalMaterials(bottle);
+        
+        // Store which oil was used
+        OilType usedOil = selectedOil;
+        
+        // Clear selection (allows user to select another bottle)
+        selectedOil = OilType.None;
+
+        // Apply engine effect based on oil type
+        if (usedOil == OilType.BPCL)
+        {
+            ApplyBPCLEffect();
+        }
+        else if (usedOil == OilType.Local)
+        {
+            ApplyLocalOilEffect();
+        }
+        
+        // Update instructions for next action
+        UpdateInstructions("Tap another bottle to compare, or observe the engine");
+    }
+    
+    /// <summary>
+    /// Smoothly return bottle to original position after pour completes
+    /// </summary>
+    private IEnumerator ReturnBottleToOriginal(GameObject bottle)
+    {
+        if (bottle == null) yield break;
+        
+        Vector3 startPos = bottle.transform.position;
+        Quaternion startRot = bottle.transform.rotation;
+        
+        float duration = 0.8f;
+        float elapsed = 0f;
+        
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+            
+            // Smooth ease out
+            t = 1f - (1f - t) * (1f - t);
+            
+            bottle.transform.position = Vector3.Lerp(startPos, bottleOriginalPosition, t);
+            bottle.transform.rotation = Quaternion.Slerp(startRot, bottleOriginalRotation, t);
+            
+            yield return null;
+        }
+        
+        bottle.transform.position = bottleOriginalPosition;
+        bottle.transform.rotation = bottleOriginalRotation;
+    }
+
+    private void UpdateTiltIndicator()
+    {
+        if (tiltIndicator == null || selectedOil == OilType.None) return;
+
+        // Update tilt indicator visual
+        float normalizedTilt = Mathf.InverseLerp(0, tiltThreshold, smoothedAccelY);
+        tiltIndicator.fillAmount = normalizedTilt;
+        tiltIndicator.color = Color.Lerp(Color.white, Color.green, normalizedTilt);
+    }
+
+    #endregion
+
+    #region Engine Effects
+
+    private void ApplyBPCLEffect()
+    {
+        UpdateStatus("Engine Efficiency Increased!");
+        currentEngineState = EngineState.Smooth;
+
+        // Stop any existing effects
+        StopEngineEffects();
+
+        // Smooth engine transition
+        if (transitionCoroutine != null)
+            StopCoroutine(transitionCoroutine);
+        transitionCoroutine = StartCoroutine(SmoothEngineTransition());
+
+        // Stop smoke particles
+        if (smokeParticles != null) smokeParticles.Stop();
+        if (blackSmokeParticles != null) blackSmokeParticles.Stop();
+
+        // Play smooth engine sound
+        PlaySound(smoothEngineSound, true);
+
+        // Show result
+        ShowResult("Engine Efficiency Increased!", bpclColor, true);
+
+        // Show BPCL Benefits Panel
+        ShowBPCLBenefits();
+    }
+
+    private void ApplyLocalOilEffect()
+    {
+        UpdateStatus("Warning: Friction Detected!");
+        currentEngineState = EngineState.Vibrating;
+
+        // Stop any existing effects
+        StopEngineEffects();
+
+        // Start vibrating engine
+        if (vibrationCoroutine != null)
+            StopCoroutine(vibrationCoroutine);
+        vibrationCoroutine = StartCoroutine(VibrateEngine());
+
+        // Start black smoke
+        if (blackSmokeParticles != null)
+        {
+            blackSmokeParticles.Play();
+        }
+
+        // Play warning and rough engine sounds
+        PlaySound(warningSound);
+        StartCoroutine(PlaySoundDelayed(roughEngineSound, 0.5f, true));
+
+        // Show result
+        ShowResult("Warning: Friction Detected!", localColor, false);
+
+        // Show Local Oil De-merits Panel
+        ShowLocalOilDemerits();
+    }
+
+    private void StopEngineEffects()
+    {
+        if (vibrationCoroutine != null)
+        {
+            StopCoroutine(vibrationCoroutine);
+            vibrationCoroutine = null;
+        }
+
+        if (transitionCoroutine != null)
+        {
+            StopCoroutine(transitionCoroutine);
+            transitionCoroutine = null;
+        }
+
+        // Reset engine position
+        if (spawnedEngine != null)
+        {
+            spawnedEngine.transform.position = engineOriginalPosition;
+        }
+    }
+
+    private IEnumerator SmoothEngineTransition()
+    {
+        float elapsed = 0f;
+        
+        // Optionally increase engine RPM smoothly
+        if (engineAnimator != null)
+        {
+            // Access throttle via reflection or public property if available
+            // For now, just apply visual smoothing
+        }
+
+        while (elapsed < smoothTransitionDuration)
+        {
+            elapsed += Time.deltaTime;
+            
+            // Subtle smooth idle motion
+            float sway = Mathf.Sin(elapsed * 2f) * 0.001f;
+            if (spawnedEngine != null)
+            {
+                spawnedEngine.transform.position = engineOriginalPosition + new Vector3(sway, 0, 0);
+            }
+            
+            yield return null;
+        }
+
+        // Return to original position
+        if (spawnedEngine != null)
+        {
+            spawnedEngine.transform.position = engineOriginalPosition;
+        }
+    }
+
+    private IEnumerator VibrateEngine()
+    {
+        while (currentEngineState == EngineState.Vibrating)
+        {
+            // Calculate vibration offset
+            float time = Time.time * vibrationFrequency;
+            float offsetX = Mathf.Sin(time) * vibrationIntensity;
+            float offsetY = Mathf.Cos(time * 1.3f) * vibrationIntensity * 0.5f;
+            float offsetZ = Mathf.Sin(time * 0.7f) * vibrationIntensity * 0.7f;
+
+            if (spawnedEngine != null)
+            {
+                spawnedEngine.transform.position = engineOriginalPosition + new Vector3(offsetX, offsetY, offsetZ);
+            }
+
+            yield return null;
+        }
+
+        // Reset position when stopped
+        if (spawnedEngine != null)
+        {
+            spawnedEngine.transform.position = engineOriginalPosition;
+        }
+    }
+
+    #endregion
+
+    #region UI Management
+
+    private void UpdateStatus(string message)
+    {
+        if (statusText != null)
+        {
+            statusText.text = message;
+        }
+        Debug.Log($"[AR_OilInteraction] Status: {message}");
+    }
+
+    private void UpdateInstructions(string message)
+    {
+        if (instructionText != null)
+        {
+            instructionText.text = message;
+        }
+    }
+
+    private void ShowResult(string message, Color color, bool isPositive)
+    {
+        if (resultPanel != null)
+        {
+            resultPanel.SetActive(true);
+            
+            if (resultText != null)
+            {
+                resultText.text = message;
+                resultText.color = color;
+            }
+
+            // Optionally animate the panel
+            StartCoroutine(AnimateResultPanel());
+        }
+
+        UpdateInstructions("Tap Reset to try again");
+    }
+
+    private IEnumerator AnimateResultPanel()
+    {
+        if (resultPanel == null) yield break;
+
+        // Scale animation
+        resultPanel.transform.localScale = Vector3.zero;
+        float duration = 0.3f;
+        float elapsed = 0f;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+            float scale = Mathf.SmoothStep(0, 1, t);
+            resultPanel.transform.localScale = Vector3.one * scale;
+            yield return null;
+        }
+
+        resultPanel.transform.localScale = Vector3.one;
+    }
+
+    private void ShowBPCLBenefits()
+    {
+        // Show benefits ONLY in AR World Space (not screen UI)
+        if (showBenefitsInARSpace)
+        {
+            CreateARBenefitsPanel(BPCL_BENEFITS_TEXT, bpclColor);
+            // Don't show screen UI panel when AR panel is active
+            if (benefitsPanel != null)
+            {
+                benefitsPanel.SetActive(false);
+            }
+        }
+        else
+        {
+            // Fallback to screen UI if AR space disabled
+            if (benefitsPanel != null)
+            {
+                benefitsPanel.SetActive(true);
+                
+                if (benefitsText != null)
+                {
+                    benefitsText.text = BPCL_BENEFITS_TEXT;
+                }
+
+                StartCoroutine(AnimateBenefitsPanel());
+
+                if (benefitsScrollRect != null)
+                {
+                    if (benefitsScrollCoroutine != null)
+                        StopCoroutine(benefitsScrollCoroutine);
+                    benefitsScrollCoroutine = StartCoroutine(AutoScrollBenefits());
+                }
+            }
+            else if (resultText != null)
+            {
+                StartCoroutine(ShowBenefitsInResultPanel());
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Hide the AR benefits panel if it exists
+    /// </summary>
+    private void HideARBenefitsPanel()
+    {
+        if (arBenefitsPanel != null)
+        {
+            Destroy(arBenefitsPanel);
+            arBenefitsPanel = null;
+        }
+    }
+    
+    /// <summary>
+    /// Create a world-space canvas panel to the SIDE of the engine showing benefits/demerits
+    /// Positioned to NOT block the engine view
+    /// </summary>
+    private void CreateARBenefitsPanel(string text, Color backgroundColor)
+    {
+        // Destroy existing AR panel if any
+        if (arBenefitsPanel != null)
+        {
+            Destroy(arBenefitsPanel);
+        }
+        
+        if (spawnedEngine == null) return;
+        
+        // Create panel GameObject
+        arBenefitsPanel = new GameObject("AR_Benefits_Panel");
+        arBenefitsPanel.transform.SetParent(null); // World space
+        
+        // Position the panel to the RIGHT SIDE of the engine (not blocking it)
+        Vector3 enginePos = spawnedEngine.transform.position;
+        Vector3 toCamera = (arCamera.transform.position - enginePos).normalized;
+        toCamera.y = 0;
+        if (toCamera.sqrMagnitude < 0.01f) toCamera = Vector3.forward;
+        toCamera.Normalize();
+        
+        // Calculate right direction (perpendicular to camera direction)
+        Vector3 rightDir = Vector3.Cross(Vector3.up, toCamera).normalized;
+        
+        // Position panel to the right side of the engine, slightly forward
+        Vector3 panelPos = enginePos 
+            + rightDir * arPanelDistance          // Move to the right
+            + Vector3.up * arPanelHeightOffset    // Move up
+            + toCamera * 0.2f;                    // Slightly forward
+        
+        arBenefitsPanel.transform.position = panelPos;
+        
+        // Face the camera
+        Vector3 lookDir = arCamera.transform.position - panelPos;
+        lookDir.y = 0; // Keep panel upright
+        if (lookDir.sqrMagnitude > 0.01f)
+        {
+            arBenefitsPanel.transform.rotation = Quaternion.LookRotation(-lookDir);
+        }
+        
+        // Create World Space Canvas
+        arBenefitsCanvas = arBenefitsPanel.AddComponent<Canvas>();
+        arBenefitsCanvas.renderMode = RenderMode.WorldSpace;
+        
+        // Scale the canvas appropriately for AR
+        arBenefitsPanel.transform.localScale = Vector3.one * arPanelScale;
+        
+        // Add Canvas Scaler
+        var scaler = arBenefitsPanel.AddComponent<CanvasScaler>();
+        scaler.dynamicPixelsPerUnit = 10;
+        
+        // Create background panel
+        GameObject bgPanel = new GameObject("Background");
+        bgPanel.transform.SetParent(arBenefitsPanel.transform);
+        bgPanel.transform.localPosition = Vector3.zero;
+        bgPanel.transform.localRotation = Quaternion.identity;
+        bgPanel.transform.localScale = Vector3.one;
+        
+        RectTransform bgRect = bgPanel.AddComponent<RectTransform>();
+        bgRect.sizeDelta = new Vector2(500, 700); // Slightly smaller
+        bgRect.anchoredPosition = Vector2.zero;
+        
+        Image bgImage = bgPanel.AddComponent<Image>();
+        Color bgColor = new Color(backgroundColor.r * 0.2f, backgroundColor.g * 0.2f, backgroundColor.b * 0.2f, 0.92f);
+        bgImage.color = bgColor;
+        
+        // Add outline/border
+        var outline = bgPanel.AddComponent<Outline>();
+        outline.effectColor = backgroundColor;
+        outline.effectDistance = new Vector2(4, 4);
+        
+        // Create title
+        GameObject titleObj = new GameObject("Title");
+        titleObj.transform.SetParent(bgPanel.transform);
+        titleObj.transform.localPosition = Vector3.zero;
+        titleObj.transform.localRotation = Quaternion.identity;
+        titleObj.transform.localScale = Vector3.one;
+        
+        RectTransform titleRect = titleObj.AddComponent<RectTransform>();
+        titleRect.anchorMin = new Vector2(0, 0.88f);
+        titleRect.anchorMax = new Vector2(1, 1);
+        titleRect.offsetMin = new Vector2(10, 0);
+        titleRect.offsetMax = new Vector2(-10, -10);
+        
+        TMPro.TextMeshProUGUI titleText = titleObj.AddComponent<TMPro.TextMeshProUGUI>();
+        titleText.text = selectedOil == OilType.BPCL ? "✓ MAK SUPREME SYNTHETIC" : "⚠ MINERAL BASED LUBE";
+        titleText.fontSize = 36;
+        titleText.fontStyle = TMPro.FontStyles.Bold;
+        titleText.color = Color.white;
+        titleText.alignment = TMPro.TextAlignmentOptions.Center;
+        
+        // Create scroll view for benefits text
+        GameObject scrollViewObj = new GameObject("ScrollView");
+        scrollViewObj.transform.SetParent(bgPanel.transform);
+        scrollViewObj.transform.localPosition = Vector3.zero;
+        scrollViewObj.transform.localRotation = Quaternion.identity;
+        scrollViewObj.transform.localScale = Vector3.one;
+        
+        RectTransform scrollRect = scrollViewObj.AddComponent<RectTransform>();
+        scrollRect.anchorMin = new Vector2(0, 0);
+        scrollRect.anchorMax = new Vector2(1, 0.85f);
+        scrollRect.offsetMin = new Vector2(15, 15);
+        scrollRect.offsetMax = new Vector2(-15, -5);
+        
+        ScrollRect scrollView = scrollViewObj.AddComponent<ScrollRect>();
+        scrollView.horizontal = false;
+        scrollView.vertical = true;
+        scrollView.movementType = ScrollRect.MovementType.Elastic;
+        
+        // Viewport
+        GameObject viewportObj = new GameObject("Viewport");
+        viewportObj.transform.SetParent(scrollViewObj.transform);
+        viewportObj.transform.localPosition = Vector3.zero;
+        viewportObj.transform.localRotation = Quaternion.identity;
+        viewportObj.transform.localScale = Vector3.one;
+        
+        RectTransform viewportRect = viewportObj.AddComponent<RectTransform>();
+        viewportRect.anchorMin = Vector2.zero;
+        viewportRect.anchorMax = Vector2.one;
+        viewportRect.offsetMin = Vector2.zero;
+        viewportRect.offsetMax = Vector2.zero;
+        
+        Image viewportImage = viewportObj.AddComponent<Image>();
+        viewportImage.color = new Color(0, 0, 0, 0); // Transparent
+        Mask viewportMask = viewportObj.AddComponent<Mask>();
+        viewportMask.showMaskGraphic = false;
+        
+        scrollView.viewport = viewportRect;
+        
+        // Content
+        GameObject contentObj = new GameObject("Content");
+        contentObj.transform.SetParent(viewportObj.transform);
+        contentObj.transform.localPosition = Vector3.zero;
+        contentObj.transform.localRotation = Quaternion.identity;
+        contentObj.transform.localScale = Vector3.one;
+        
+        RectTransform contentRect = contentObj.AddComponent<RectTransform>();
+        contentRect.anchorMin = new Vector2(0, 1);
+        contentRect.anchorMax = new Vector2(1, 1);
+        contentRect.pivot = new Vector2(0.5f, 1);
+        contentRect.sizeDelta = new Vector2(0, 1200); // Tall content for scrolling
+        
+        scrollView.content = contentRect;
+        
+        // Content size fitter
+        var sizeFitter = contentObj.AddComponent<ContentSizeFitter>();
+        sizeFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+        
+        // Benefits Text
+        GameObject textObj = new GameObject("BenefitsText");
+        textObj.transform.SetParent(contentObj.transform);
+        textObj.transform.localPosition = Vector3.zero;
+        textObj.transform.localRotation = Quaternion.identity;
+        textObj.transform.localScale = Vector3.one;
+        
+        RectTransform textRect = textObj.AddComponent<RectTransform>();
+        textRect.anchorMin = new Vector2(0, 0);
+        textRect.anchorMax = new Vector2(1, 1);
+        textRect.offsetMin = new Vector2(5, 5);
+        textRect.offsetMax = new Vector2(-5, -5);
+        
+        arBenefitsText = textObj.AddComponent<TMPro.TextMeshProUGUI>();
+        arBenefitsText.text = text;
+        arBenefitsText.fontSize = 24;
+        arBenefitsText.color = Color.white;
+        arBenefitsText.alignment = TMPro.TextAlignmentOptions.TopLeft;
+        arBenefitsText.richText = true;
+        arBenefitsText.textWrappingMode = TMPro.TextWrappingModes.Normal;
+        
+        // Set layer to Default so it renders in AR
+        SetLayerRecursively(arBenefitsPanel, LayerMask.NameToLayer("Default"));
+        
+        Debug.Log($"[AR_Oil] Created AR Benefits Panel at {panelPos}");
+        
+        // Start auto-scrolling the AR panel
+        StartCoroutine(AutoScrollARBenefitsPanel(scrollView));
+        
+        // Make panel follow/face camera
+        StartCoroutine(UpdateARPanelFacing());
+    }
+    
+    private IEnumerator AutoScrollARBenefitsPanel(ScrollRect scrollRect)
+    {
+        yield return new WaitForSeconds(2f);
+        
+        // Reset to top
+        scrollRect.verticalNormalizedPosition = 1f;
+        yield return new WaitForSeconds(1f);
+        
+        // Slowly scroll down
+        float scrollDuration = 12f;
+        float elapsed = 0f;
+        
+        while (elapsed < scrollDuration && arBenefitsPanel != null)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / scrollDuration;
+            scrollRect.verticalNormalizedPosition = Mathf.Lerp(1f, 0f, t);
+            yield return null;
+        }
+    }
+    
+    private IEnumerator UpdateARPanelFacing()
+    {
+        while (arBenefitsPanel != null)
+        {
+            // Smoothly rotate to face camera
+            Vector3 toCamera = arCamera.transform.position - arBenefitsPanel.transform.position;
+            toCamera.y = 0; // Keep panel upright
+            
+            if (toCamera.sqrMagnitude > 0.01f)
+            {
+                Quaternion targetRot = Quaternion.LookRotation(-toCamera);
+                arBenefitsPanel.transform.rotation = Quaternion.Slerp(
+                    arBenefitsPanel.transform.rotation, 
+                    targetRot, 
+                    Time.deltaTime * 2f
+                );
+            }
+            
+            yield return null;
+        }
+    }
+
+    private IEnumerator AnimateBenefitsPanel()
+    {
+        if (benefitsPanel == null) yield break;
+
+        // Slide in from right animation
+        RectTransform rect = benefitsPanel.GetComponent<RectTransform>();
+        if (rect != null)
+        {
+            Vector2 targetPos = rect.anchoredPosition;
+            rect.anchoredPosition = targetPos + new Vector2(500, 0);
+
+            float duration = 0.5f;
+            float elapsed = 0f;
+
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                float t = Mathf.SmoothStep(0, 1, elapsed / duration);
+                rect.anchoredPosition = Vector2.Lerp(targetPos + new Vector2(500, 0), targetPos, t);
+                yield return null;
+            }
+
+            rect.anchoredPosition = targetPos;
+        }
+    }
+
+    private IEnumerator AutoScrollBenefits()
+    {
+        if (benefitsScrollRect == null) yield break;
+
+        // Wait before starting scroll
+        yield return new WaitForSeconds(1.5f);
+
+        // Reset to top
+        benefitsScrollRect.verticalNormalizedPosition = 1f;
+        yield return new WaitForSeconds(0.5f);
+
+        // Slowly scroll down
+        float scrollDuration = 10f;
+        float elapsed = 0f;
+
+        while (elapsed < scrollDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / scrollDuration;
+            benefitsScrollRect.verticalNormalizedPosition = Mathf.Lerp(1f, 0f, t);
+            yield return null;
+        }
+
+        // Pause at bottom
+        yield return new WaitForSeconds(2f);
+
+        // Scroll back to top
+        elapsed = 0f;
+        while (elapsed < 2f)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / 2f;
+            benefitsScrollRect.verticalNormalizedPosition = Mathf.Lerp(0f, 1f, t);
+            yield return null;
+        }
+    }
+
+    private IEnumerator ShowBenefitsInResultPanel()
+    {
+        // Show benefits one by one in result panel
+        string[] benefits = new string[]
+        {
+            "<color=#00AA00><b>✓ MAK Supreme Synthetic Lube</b></color>",
+            "<color=#00FF00>🔹 More Mileage</color>\nSuperior fuel efficiency",
+            "<color=#00FF00>🔹 Long Engine Life</color>\nAdvanced protection against wear",
+            "<color=#00FF00>🔹 All Weather Protection</color>\nPerforms in extreme hot & cold",
+            "<color=#00FF00>🔹 Smooth & Easy Start</color>\nQuick oil flow at low temperatures",
+            "<color=#00AA00><i>MAK Lubricants - BPCL</i></color>"
+        };
+
+        yield return new WaitForSeconds(2f);
+
+        foreach (string benefit in benefits)
+        {
+            if (resultText != null)
+            {
+                resultText.text = benefit;
+            }
+            yield return new WaitForSeconds(3f);
+        }
+
+        // Show final message
+        if (resultText != null)
+        {
+            resultText.text = "<color=#00AA00><b>Engine Efficiency Increased!</b></color>\n\nTap Reset to try again";
+        }
+    }
+
+    private void ShowLocalOilDemerits()
+    {
+        // Show demerits ONLY in AR World Space (not screen UI)
+        if (showBenefitsInARSpace)
+        {
+            CreateARBenefitsPanel(LOCAL_DEMERITS_TEXT, localColor);
+            // Don't show screen UI panel when AR panel is active
+            if (benefitsPanel != null)
+            {
+                benefitsPanel.SetActive(false);
+            }
+        }
+        else
+        {
+            // Fallback to screen UI if AR space disabled
+            if (benefitsPanel != null)
+            {
+                benefitsPanel.SetActive(true);
+                
+                if (benefitsText != null)
+                {
+                    benefitsText.text = LOCAL_DEMERITS_TEXT;
+                }
+
+                // Change panel color to red theme
+                Image panelBg = benefitsPanel.GetComponent<Image>();
+                if (panelBg != null)
+                {
+                    panelBg.color = new Color(0.2f, 0.05f, 0.05f, 0.95f);
+                }
+
+                Outline outline = benefitsPanel.GetComponent<Outline>();
+                if (outline != null)
+                {
+                    outline.effectColor = new Color(0.8f, 0.2f, 0.2f);
+                }
+
+                StartCoroutine(AnimateBenefitsPanel());
+
+                if (benefitsScrollRect != null)
+                {
+                    if (benefitsScrollCoroutine != null)
+                        StopCoroutine(benefitsScrollCoroutine);
+                    benefitsScrollCoroutine = StartCoroutine(AutoScrollBenefits());
+                }
+            }
+            else if (resultText != null)
+            {
+                StartCoroutine(ShowDemeritsInResultPanel());
+            }
+        }
+    }
+
+    private IEnumerator ShowDemeritsInResultPanel()
+    {
+        // Show demerits one by one in result panel
+        string[] demerits = new string[]
+        {
+            "<color=#FF4444><b>⚠ Mineral Based Lube</b></color>",
+            "<color=#FF4444>🔸 Less Mileage</color>\nHigher friction, reduced efficiency",
+            "<color=#FF4444>🔸 Decreased Engine Life</color>\nFaster wear on engine parts",
+            "<color=#FF4444>🔸 Not for All Weather</color>\nPoor performance in extreme temps",
+            "<color=#FF4444>🔸 Hard Start</color>\nSlow oil flow when cold",
+            "<color=#FF6600><i>Consider upgrading to MAK Synthetic!</i></color>"
+        };
+
+        yield return new WaitForSeconds(2f);
+
+        foreach (string demerit in demerits)
+        {
+            if (resultText != null)
+            {
+                resultText.text = demerit;
+            }
+            yield return new WaitForSeconds(3f);
+        }
+
+        // Show final message
+        if (resultText != null)
+        {
+            resultText.text = "<color=#FF4444><b>Warning: Friction Detected!</b></color>\n\nTap Reset to try again";
+        }
+    }
+
+    #endregion
+
+    #region Audio
+
+    private void PlaySound(AudioClip clip, bool loop = false)
+    {
+        if (audioSource == null || clip == null) return;
+
+        if (loop)
+        {
+            audioSource.clip = clip;
+            audioSource.loop = true;
+            audioSource.Play();
+        }
+        else
+        {
+            audioSource.PlayOneShot(clip);
+        }
+    }
+
+    private IEnumerator PlaySoundDelayed(AudioClip clip, float delay, bool loop = false)
+    {
+        yield return new WaitForSeconds(delay);
+        PlaySound(clip, loop);
+    }
+
+    #endregion
+
+    #region Reset
+
+    /// <summary>
+    /// Resets the scene to its initial state.
+    /// Called by the Reset button.
+    /// </summary>
+    public void ResetScene()
+    {
+        // Stop all coroutines
+        StopAllCoroutines();
+
+        // Stop audio
+        if (audioSource != null)
+        {
+            audioSource.Stop();
+        }
+
+        // Stop particles
+        if (smokeParticles != null) smokeParticles.Stop();
+        if (blackSmokeParticles != null) blackSmokeParticles.Stop();
+        if (pouringParticles != null) pouringParticles.Stop();
+
+        // Destroy spawned objects
+        if (spawnedEngine != null) Destroy(spawnedEngine);
+        if (spawnedBPCLBottle != null) Destroy(spawnedBPCLBottle);
+        if (spawnedLocalBottle != null) Destroy(spawnedLocalBottle);
+        
+        // Destroy AR Benefits Panel
+        if (arBenefitsPanel != null) Destroy(arBenefitsPanel);
+
+        // Clear references
+        spawnedEngine = null;
+        spawnedBPCLBottle = null;
+        spawnedLocalBottle = null;
+        engineAnimator = null;
+        oilTankHoleTransform = null;
+        arBenefitsPanel = null;
+        arBenefitsCanvas = null;
+        arBenefitsText = null;
+
+        // Reset state
+        hasSpawned = false;
+        planeDetected = false;
+        selectedOil = OilType.None;
+        currentEngineState = EngineState.Idle;
+        isPouringInProgress = false;
+        hasPoured = false;
+        pourProgress = 0f;
+        smoothedAccelY = 0f;
+
+        // Clear stored materials
+        originalMaterials.Clear();
+
+        // Reset UI
+        if (pourProgressSlider != null)
+        {
+            pourProgressSlider.value = 0;
+            pourProgressSlider.gameObject.SetActive(false);
+        }
+
+        if (tiltIndicator != null)
+        {
+            tiltIndicator.gameObject.SetActive(false);
+        }
+
+        if (resultPanel != null)
+        {
+            resultPanel.SetActive(false);
+        }
+
+        if (benefitsPanel != null)
+        {
+            benefitsPanel.SetActive(false);
+        }
+
+        // Re-enable plane visualization
+        foreach (var plane in arPlaneManager.trackables)
+        {
+            plane.gameObject.SetActive(true);
+        }
+
+        UpdateStatus("Scene Reset");
+        UpdateInstructions("Scanning for horizontal surface...");
+
+        Debug.Log("[AR_OilInteraction] Scene reset complete");
+    }
+
+    #endregion
+
+    #region Public Methods
+
+    /// <summary>
+    /// Gets the current selected oil type.
+    /// </summary>
+    public OilType GetSelectedOilType() => selectedOil;
+
+    /// <summary>
+    /// Gets the current engine state.
+    /// </summary>
+    public EngineState GetEngineState() => currentEngineState;
+
+    /// <summary>
+    /// Gets the pour progress (0-1).
+    /// </summary>
+    public float GetPourProgress() => pourProgress;
+
+    /// <summary>
+    /// Checks if objects have been spawned.
+    /// </summary>
+    public bool HasSpawned() => hasSpawned;
+
+    /// <summary>
+    /// Manually triggers spawning (useful for testing).
+    /// </summary>
+    public void ForceSpawn(Vector3 position)
+    {
+        detectedPlanePosition = position;
+        planeDetected = true;
+        SpawnObjects();
+    }
+
+    /// <summary>
+    /// Sets layer recursively for all children
+    /// </summary>
+    private void SetLayerRecursively(GameObject obj, int layer)
+    {
+        if (obj == null) return;
+        
+        obj.layer = layer;
+        foreach (Transform child in obj.transform)
+        {
+            SetLayerRecursively(child.gameObject, layer);
+        }
+    }
+
+    #endregion
+
+    #region Editor Testing
+
+    #if UNITY_EDITOR
+    /// <summary>
+    /// Simulates tilt for editor testing.
+    /// Press T key to simulate tilting.
+    /// </summary>
+    private void LateUpdate()
+    {
+        #if ENABLE_INPUT_SYSTEM
+        if (Keyboard.current != null && Keyboard.current.tKey.isPressed && selectedOil != OilType.None && !hasPoured)
+        #else
+        if (Input.GetKey(KeyCode.T) && selectedOil != OilType.None && !hasPoured)
+        #endif
+        {
+            // Simulate phone tilt
+            smoothedAccelY = Mathf.Lerp(smoothedAccelY, tiltThreshold - 0.1f, Time.deltaTime * 2f);
+        }
+    }
+    #endif
+
+    #endregion
+}
